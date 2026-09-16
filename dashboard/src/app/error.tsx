@@ -3,7 +3,19 @@
 import * as React from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { RegistryError } from '@/lib/registry-client';
+
+/**
+ * Stable message prefixes thrown by the registry data layer
+ * (`src/lib/registry-client.ts`). Server components serialize thrown errors
+ * to plain objects before they reach this boundary, so `instanceof
+ * RegistryError` is always false here — the failure kind is carried in the
+ * message prefix instead.
+ */
+const REGISTRY_PREFIXES = ['RegistryUnreachable:', 'RegistryMisconfigured:'];
+
+function isRegistryFailure(message: string): boolean {
+  return REGISTRY_PREFIXES.some((p) => message.startsWith(p));
+}
 
 /**
  * Route-level error boundary. Every failure is logged (with the Next.js
@@ -22,7 +34,7 @@ export default function PageError({
     console.error('[dashboard] route error:', error);
   }, [error]);
 
-  const registryError = error instanceof RegistryError ? error : null;
+  const registryError = isRegistryFailure(error.message);
 
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
@@ -36,8 +48,8 @@ export default function PageError({
           : 'An unexpected error occurred while rendering this page. Retry, or reload the console.'}
       </p>
       {registryError && (
-        <p className="max-w-md font-mono text-xs text-muted-foreground/80" role="presentation">
-          {registryError.message}
+        <p className="max-w-md font-mono text-xs text-muted-foreground/80">
+          {error.message}
         </p>
       )}
       {error.digest && (

@@ -55,25 +55,26 @@ export default async function ContractDetailPage({ params }: { params: Params })
     a.publishedAt.localeCompare(b.publishedAt),
   );
   const latest = versions[versions.length - 1];
-  const latestDetail = await client.getVersion(org, project, contract, latest?.version ?? 'v1');
-  const consumers = latest
-    ? await client.listConsumers(org, project, contract, latest.version)
-    : [];
 
-  // Adjacent-diff verdict for every version (vs its predecessor).
-  const verdictByVersion = new Map<string, { from: string; verdict: Classification }>();
-  for (let i = 1; i < versions.length; i += 1) {
-    const report = await client.getDiff(
-      org,
-      project,
-      contract,
-      versions[i - 1].version,
-      versions[i].version,
-    );
-    if (report) {
-      verdictByVersion.set(versions[i].version, { from: versions[i - 1].version, verdict: report.verdict });
-    }
-  }
+  // Latest detail, consumers of the latest version, and every adjacent-pair
+  // diff verdict are independent — one batched round instead of N−1 serial
+  // registry round-trips (19 awaited sequentially for 20 versions before).
+  const [latestDetail, consumers, verdictByVersion] = await Promise.all([
+    latest ? client.getVersion(org, project, contract, latest.version) : Promise.resolve(null),
+    latest ? client.listConsumers(org, project, contract, latest.version) : Promise.resolve([]),
+    (async () => {
+      const pairs = versions.slice(1).map((v, i) => ({ from: versions[i].version, to: v.version }));
+      const reports = await Promise.all(
+        pairs.map((p) => client.getDiff(org, project, contract, p.from, p.to)),
+      );
+      const map = new Map<string, { from: string; verdict: Classification }>();
+      pairs.forEach((p, i) => {
+        const report = reports[i];
+        if (report) map.set(p.to, { from: p.from, verdict: report.verdict });
+      });
+      return map;
+    })(),
+  ]);
 
   const publishers = publisherRollup(versions);
 
@@ -85,11 +86,14 @@ export default async function ContractDetailPage({ params }: { params: Params })
           Contracts
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-        <Link href={`/contracts?org=${org}`} className="hover:text-foreground">
+        <Link href={`/contracts?org=${encodeURIComponent(org)}`} className="hover:text-foreground">
           {org}
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-        <Link href={`/contracts?org=${org}&project=${project}`} className="hover:text-foreground">
+        <Link
+          href={`/contracts?org=${encodeURIComponent(org)}&project=${encodeURIComponent(project)}`}
+          className="hover:text-foreground"
+        >
           {project}
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
@@ -164,7 +168,14 @@ export default async function ContractDetailPage({ params }: { params: Params })
 
         {/* Versions timeline */}
         <TabsContent value="versions">
-          <ol className="relative flex flex-col gap-6 border-l border-border pl-6">
+          {versions.length === 0 ? (
+            <EmptyState
+              icon={CircleDot}
+              title="No versions published"
+              description="This contract is registered but has no published versions yet. Publish one with `bridge publish` to start the timeline."
+            />
+          ) : (
+            <ol className="relative flex flex-col gap-6 border-l border-border pl-6">
             {[...versions].reverse().map((v, idx) => {
               const vd = verdictByVersion.get(v.version);
               return (
@@ -184,7 +195,7 @@ export default async function ContractDetailPage({ params }: { params: Params })
                     )}
                     {vd && (
                       <Link
-                        href={`/contracts/${org}/${project}/${contract}/diff?from=${vd.from}&to=${v.version}`}
+                        href={`/contracts/${encodeURIComponent(org)}/${encodeURIComponent(project)}/${encodeURIComponent(contract)}/diff?from=${encodeURIComponent(vd.from)}&to=${encodeURIComponent(v.version)}`}
                         className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
                       >
                         diff {vd.from} → {v.version}
@@ -222,6 +233,7 @@ export default async function ContractDetailPage({ params }: { params: Params })
               );
             })}
           </ol>
+          )}
         </TabsContent>
 
         {/* Consumers */}
@@ -261,7 +273,7 @@ export default async function ContractDetailPage({ params }: { params: Params })
                       <TableRow key={c.packageName}>
                         <TableCell>
                           <Link
-                            href={`/contracts/${c.org}/${c.project}/${c.base}`}
+                            href={`/contracts/${encodeURIComponent(c.org)}/${encodeURIComponent(c.project)}/${encodeURIComponent(c.base)}`}
                             className="font-mono text-[13px] hover:text-primary"
                           >
                             {c.packageName}

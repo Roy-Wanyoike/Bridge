@@ -32,7 +32,9 @@ npm run dev
 ```
 
 The REST client (`src/lib/registry-client.ts`) targets the service API:
-`/v1/orgs/{org}/projects/{project}/contracts...`, `/v1/search`, `/v1/audit`.
+`/v1/orgs/{org}/projects/{project}/contracts...`, `/v1/graph`, `/v1/audit`.
+Search across contracts is derived client-side from the list endpoints
+(the registry's `/v1/search` endpoint is a CLI affordance, not used here).
 
 ## Routes
 

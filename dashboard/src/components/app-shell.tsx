@@ -131,8 +131,17 @@ export function AppShell({
     return pathname.startsWith(href);
   };
 
+  const onContracts = pathname === '/contracts' || pathname.startsWith('/contracts/');
+
   return (
-    <div className="min-h-screen bg-background">
+    <div id="app-shell-root" className="min-h-screen bg-background">
+      {/* Skip link: first tab stop, visible on focus */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:text-foreground focus:shadow-lg"
+      >
+        Skip to content
+      </a>
       {/* Sidebar */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-border bg-[#0c0c0f] lg:flex">
         <div className="flex items-center gap-2.5 px-5 py-5">
@@ -170,6 +179,19 @@ export function AppShell({
             <div className="flex items-center gap-2 lg:hidden">
               <BrandMark className="h-6 w-6 text-primary" />
               <span className="text-sm font-semibold tracking-[0.18em]">BRIDGE</span>
+              {/* Demo/live disclosure must survive below lg — the sidebar card
+                  carrying it is hidden on mobile, so a compact chip lives in
+                  the header row instead. */}
+              <span
+                className={cn(
+                  'ml-1 rounded-md border px-1.5 py-0.5 font-mono text-[10px] tracking-wider',
+                  demoMode
+                    ? 'border-[var(--warning)]/50 text-[var(--warning)]'
+                    : 'border-primary/50 text-primary',
+                )}
+              >
+                {demoMode ? 'DEMO' : 'LIVE'}
+              </span>
             </div>
             <div className="hidden items-center gap-2 text-xs text-muted-foreground lg:flex">
               <span className="rounded-md border border-border bg-secondary/60 px-2 py-1 font-mono">
@@ -177,9 +199,11 @@ export function AppShell({
               </span>
               <span>registry state: content-addressed, immutable versions</span>
             </div>
-            <React.Suspense fallback={null}>
-              <ScopeSwitcher orgs={orgs} />
-            </React.Suspense>
+            {onContracts && (
+              <React.Suspense fallback={null}>
+                <ScopeSwitcher orgs={orgs} />
+              </React.Suspense>
+            )}
           </div>
           {/* compact nav for narrow viewports */}
           <nav aria-label="Primary" className="flex gap-1 overflow-x-auto px-4 pb-2 lg:hidden">
@@ -201,7 +225,9 @@ export function AppShell({
           </nav>
         </header>
 
-        <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">{children}</main>
+        <main id="main-content" tabIndex={-1} className="flex-1 px-4 py-6 sm:px-6 lg:px-8 focus:outline-none">
+          {children}
+        </main>
 
         <footer className="mt-auto border-t border-border px-4 py-4 text-xs text-muted-foreground sm:px-6 lg:px-8">
           <div className="flex flex-wrap items-center justify-between gap-2">

@@ -27,6 +27,7 @@ export function LanguageBadges({
           key={lang}
           variant="secondary"
           title={LANGUAGE_LABELS[lang] ?? lang}
+          aria-label={LANGUAGE_LABELS[lang] ?? lang}
           className="px-1.5 font-mono text-[10px] tracking-wider text-muted-foreground"
         >
           {SHORT[lang] ?? lang.toUpperCase()}

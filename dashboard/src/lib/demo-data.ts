@@ -1077,7 +1077,16 @@ export function demoListConsumers(
       version: latest.version,
       owner: contract.owner,
       depth,
-      severity: direct ? verdict : depth === 2 ? ('WARNING' as Classification) : ('SAFE' as Classification),
+      // Honest severity: SAFE verdicts never fabricate reach. For non-SAFE
+      // verdicts, direct consumers report the real verdict; deeper consumers
+      // report WARNING (documented simplification — per-consumer type-reach
+      // analysis lives in the registry's impact engine).
+      severity:
+        verdict === 'SAFE'
+          ? ('SAFE' as Classification)
+          : direct
+            ? verdict
+            : ('WARNING' as Classification),
     };
   });
 }
@@ -1256,7 +1265,6 @@ export function demoGetOverview(): OverviewData {
       .map((s) => ({ base: s.base, org: s.org, project: s.project, verdict: s.latestVerdict! })),
     recentPublishes,
     recentBreaking,
-    objectCount: versions,
     lastPublishAt: recentPublishes[0]?.publishedAt,
   };
 }
@@ -1280,4 +1288,10 @@ export function demoPublishers(org: string, project: string, base: string, versi
   return [...byPublisher.entries()].sort((a, b) => b[1].lastAt.localeCompare(a[1].lastAt));
 }
 
-export const DEMO_MODE_DEFAULT = true;
+/**
+ * Production builds default to LIVE mode: fabricated data must never reach
+ * real users just because an env var was forgotten. `next dev` overrides the
+ * unset case to demo (see `isDemoMode`), so the zero-setup clone-and-browse
+ * experience is unchanged for developers.
+ */
+export const DEMO_MODE_DEFAULT = false;

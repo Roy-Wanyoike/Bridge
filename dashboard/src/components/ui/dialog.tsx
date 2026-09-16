@@ -80,7 +80,14 @@ function Dialog({ open, onOpenChange, children }: DialogProps) {
     };
     document.addEventListener('keydown', onKey);
 
+    // Make the app background inert while the dialog is open: focus traps
+    // catch keyboard users, but without `inert` screen-reader virtual cursors
+    // could still browse (and activate) content behind the modal.
+    const appRoot = document.getElementById('app-shell-root');
+    appRoot?.setAttribute('inert', '');
+
     return () => {
+      appRoot?.removeAttribute('inert');
       cancelAnimationFrame(raf);
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = previousOverflow;

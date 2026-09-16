@@ -166,7 +166,7 @@ export function CompatGraph({ data }: { data: GraphData }) {
             key={n.id}
             tabIndex={0}
             role="link"
-            aria-label={`${n.base} at ${n.version}, ${n.consumers} consumers. Open contract page.`}
+            aria-label={`${n.base} at ${n.version}, ${n.consumers} consumers${n.verdict ? `, latest diff verdict: ${n.verdict}` : ""}. Open contract page.`}
             className="cursor-pointer focus:outline-none"
             onMouseEnter={() => setHovered(n.id)}
             onMouseLeave={() => setHovered(null)}

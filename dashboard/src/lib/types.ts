@@ -224,7 +224,6 @@ export interface OverviewData {
   latestVerdicts: { base: string; org: string; project: string; verdict: Classification }[];
   recentPublishes: (VersionMeta & { org: string; project: string })[];
   recentBreaking: DiffReport[];
-  objectCount: number;
   lastPublishAt?: string;
 }
 

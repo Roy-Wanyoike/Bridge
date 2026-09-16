@@ -69,7 +69,11 @@ export default async function ContractsPage({ searchParams }: { searchParams: Se
   contracts = sortContracts(contracts, sort);
 
   const orgs = await client.listOrgs();
-  const projects = [...new Set(allContracts.map((c) => c.project))].sort();
+  // Project options follow the selected org — listing every org's projects
+  // lets org+project mismatches silently yield empty results.
+  const projects = [
+    ...new Set(allContracts.filter((c) => !org || c.org === org).map((c) => c.project)),
+  ].sort();
   const owners = [...new Set(allContracts.map((c) => c.owner))].sort();
 
   return (

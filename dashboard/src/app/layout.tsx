@@ -4,6 +4,15 @@ import { getRegistryClient, isDemoMode } from '@/lib/registry-client';
 import './globals.css';
 
 const CONSOLE_URL = process.env.NEXT_PUBLIC_CONSOLE_URL ?? 'http://localhost:3000';
+if (
+  process.env.NODE_ENV === 'production' &&
+  !process.env.NEXT_PUBLIC_CONSOLE_URL &&
+  CONSOLE_URL === 'http://localhost:3000'
+) {
+  console.warn(
+    '[dashboard] NEXT_PUBLIC_CONSOLE_URL is not set — canonical/OG URLs will point at http://localhost:3000 in this production deployment.',
+  );
+}
 
 export const metadata: Metadata = {
   metadataBase: new URL(CONSOLE_URL),
@@ -32,7 +41,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   let orgs: Awaited<ReturnType<typeof getOrgs>> = [];
   try {
     orgs = await getOrgs();
-  } catch {
+  } catch (err) {
+    // The shell still renders (pages surface the error via their boundary);
+    // the failure is logged so the sidebar silently losing org scope is
+    // diagnosable from server logs.
+    console.error('[dashboard] layout: failed to load orgs for the shell:', err);
     orgs = [];
   }
 

@@ -87,7 +87,7 @@ export default async function OverviewPage() {
           icon={Database}
           value={`${data.orgs} / ${data.projects}`}
           label="Orgs / Projects"
-          footnote={`${data.objectCount} objects in the store`}
+          footnote="across the registry"
         />
       </section>
 
@@ -157,7 +157,7 @@ export default async function OverviewPage() {
                   <TableRow key={`${p.org}/${p.project}/${p.base}/${p.version}`}>
                     <TableCell>
                       <Link
-                        href={`/contracts/${p.org}/${p.project}/${p.base}`}
+                        href={`/contracts/${encodeURIComponent(p.org)}/${encodeURIComponent(p.project)}/${encodeURIComponent(p.base)}`}
                         className="font-mono text-[13px] text-foreground hover:text-primary"
                       >
                         {p.base}
@@ -210,7 +210,7 @@ export default async function OverviewPage() {
             {data.recentBreaking.map((r) => (
               <Link
                 key={`${r.contract}-${r.from}-${r.to}`}
-                href={`/contracts/${r.org}/${r.project}/${r.contract}/diff?from=${r.from}&to=${r.to}`}
+                href={`/contracts/${encodeURIComponent(r.org)}/${encodeURIComponent(r.project)}/${encodeURIComponent(r.contract)}/diff?from=${encodeURIComponent(r.from)}&to=${encodeURIComponent(r.to)}`}
                 className="group rounded-md border border-border bg-secondary/30 p-3 transition-colors hover:border-primary/40 hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div className="flex items-center justify-between gap-2">

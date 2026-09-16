@@ -25,31 +25,43 @@ import {
   demoListContracts,
   demoListOrgs,
   demoListVersions,
-  demoPublishers,
 } from './demo-data';
 
 /**
- * Reads the demo/live switches. `NEXT_PUBLIC_DEMO_MODE` defaults to true so
- * the console is browsable with zero backend; set it to exactly `false` or
- * `0` (and point `NEXT_PUBLIC_REGISTRY_URL` at a running registry service)
- * to go live. Anything else keeps demo mode on and warns — booleans are
- * never coerced loosely (`'FALSE'` does not disable demo mode).
+ * Reads the demo/live switches.
+ *
+ * Defaults:
+ * - production builds start in LIVE mode (never serve fabricated data to real
+ *   users just because an env var was forgotten); set
+ *   `NEXT_PUBLIC_DEMO_MODE=true` explicitly if a prod deployment wants demo.
+ * - `next dev` keeps demo mode as the zero-setup default.
+ *
+ * `NEXT_PUBLIC_DEMO_MODE` set to exactly `false` or `0` always forces live;
+ * exactly `true` or `1` always forces demo. Anything else keeps the default
+ * and warns — booleans are never coerced loosely (`'FALSE'` does not count).
  */
 export function isDemoMode(): boolean {
   const raw = process.env.NEXT_PUBLIC_DEMO_MODE;
-  if (raw === undefined || raw === '') return DEMO_MODE_DEFAULT;
+  if (raw === undefined || raw === '') {
+    return process.env.NODE_ENV === 'production' ? DEMO_MODE_DEFAULT : true;
+  }
   if (raw === 'false' || raw === '0') return false;
   if (raw !== 'true' && raw !== '1') {
     console.warn(
-      `[dashboard] NEXT_PUBLIC_DEMO_MODE=${JSON.stringify(raw)} is not a recognized boolean (true/false/1/0); keeping demo mode ON. Set it to exactly "false" or "0" to go live.`,
+      `[dashboard] NEXT_PUBLIC_DEMO_MODE=${JSON.stringify(raw)} is not a recognized boolean (true/false/1/0); keeping the default. Set it to exactly "false" or "0" to go live.`,
     );
+    return process.env.NODE_ENV === 'production' ? DEMO_MODE_DEFAULT : true;
   }
   return true;
 }
 
+/**
+ * The registry service base URL for live mode, or `null` in demo mode.
+ * Falls back to the documented local port when the env var is unset.
+ */
 export function registryBaseUrl(): string | null {
   if (isDemoMode()) return null;
-  return process.env.NEXT_PUBLIC_REGISTRY_URL ?? 'http://localhost:8080';
+  return process.env.NEXT_PUBLIC_REGISTRY_URL ?? 'http://localhost:4350';
 }
 
 /* ------------------------------------------------------------------ */
@@ -95,9 +107,43 @@ function pickArray(body: Record<string, unknown>, keys: string[], path: string):
     if (Array.isArray(v)) return v;
   }
   throw new RegistryError(
-    `registry response for GET ${path} has none of the expected array keys [${keys.join(', ')}] — API schema drift`,
+    `RegistryUnreachable: registry response for GET ${path} has none of the expected array keys [${keys.join(', ')}] — API schema drift`,
     { status: 0, path },
   );
+}
+
+/**
+ * Encodes a path segment for interpolation into a registry URL. Identifiers
+ * are data, not syntax: an org named `a/b` must round-trip instead of
+ * silently addressing the wrong route.
+ */
+function enc(segment: string): string {
+  return encodeURIComponent(segment);
+}
+
+/**
+ * Maps `items` through an async `fn` with at most `limit` promises in flight
+ * (worker-pool style, order-preserving). The overview used to fan out one
+ * unbounded `Promise.all` per candidate contract — hundreds of sockets and a
+ * hammered registry on large installations.
+ */
+async function mapBounded<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = next;
+      if (i >= items.length) return;
+      next += 1;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export class RestRegistryClient implements RegistryClient {
@@ -115,13 +161,16 @@ export class RestRegistryClient implements RegistryClient {
       const timedOut = err instanceof Error && err.name === 'TimeoutError';
       throw new RegistryError(
         timedOut
-          ? `registry request timed out after ${FETCH_TIMEOUT_MS}ms on GET ${path}`
-          : `registry unreachable on GET ${path}`,
+          ? `RegistryUnreachable: registry request timed out after ${FETCH_TIMEOUT_MS}ms on GET ${path}`
+          : `RegistryUnreachable: registry unreachable on GET ${path}`,
         { status: 0, path, cause: err },
       );
     }
     if (!res.ok) {
-      throw new RegistryError(`registry ${res.status} on GET ${path}`, { status: res.status, path });
+      throw new RegistryError(`RegistryUnreachable: registry ${res.status} on GET ${path}`, {
+        status: res.status,
+        path,
+      });
     }
     return (await res.json()) as T;
   }
@@ -133,7 +182,7 @@ export class RestRegistryClient implements RegistryClient {
   }
 
   async listContracts(org: string, project: string): Promise<ContractSummary[]> {
-    const path = `/v1/orgs/${org}/projects/${project}/contracts`;
+    const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts`;
     const body = await this.get<Record<string, unknown>>(path);
     return pickArray(body, ['contracts'], path) as ContractSummary[];
   }
@@ -144,7 +193,7 @@ export class RestRegistryClient implements RegistryClient {
     // walk runs in parallel instead of a sequential N+1 cascade.
     const perOrg = await Promise.all(
       orgInfos.map(async (o) => {
-        const projectsPath = `/v1/orgs/${o.org}/projects`;
+        const projectsPath = `/v1/orgs/${enc(o.org)}/projects`;
         let projects = o.projects ?? [];
         if (projects.length === 0) {
           const body = await this.get<Record<string, unknown>>(projectsPath);
@@ -162,7 +211,7 @@ export class RestRegistryClient implements RegistryClient {
   }
 
   async getContract(org: string, project: string, base: string): Promise<ContractSummary | null> {
-    const path = `/v1/orgs/${org}/projects/${project}/contracts/${base}`;
+    const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}`;
     try {
       return await this.get<ContractSummary>(path);
     } catch (err) {
@@ -172,7 +221,7 @@ export class RestRegistryClient implements RegistryClient {
   }
 
   async listVersions(org: string, project: string, base: string): Promise<VersionMeta[]> {
-    const path = `/v1/orgs/${org}/projects/${project}/contracts/${base}/versions`;
+    const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}/versions`;
     const body = await this.get<Record<string, unknown>>(path);
     return pickArray(body, ['versions'], path) as VersionMeta[];
   }
@@ -183,7 +232,7 @@ export class RestRegistryClient implements RegistryClient {
     base: string,
     version: string,
   ): Promise<VersionDetail | null> {
-    const path = `/v1/orgs/${org}/projects/${project}/contracts/${base}/versions/${version}`;
+    const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}/versions/${enc(version)}`;
     try {
       return await this.get<VersionDetail>(path);
     } catch (err) {
@@ -198,7 +247,7 @@ export class RestRegistryClient implements RegistryClient {
     base: string,
     version: string,
   ): Promise<ConsumerRef[]> {
-    const path = `/v1/orgs/${org}/projects/${project}/contracts/${base}/versions/${version}/consumers`;
+    const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}/versions/${enc(version)}/consumers`;
     const body = await this.get<Record<string, unknown>>(path);
     return pickArray(body, ['consumers'], path) as ConsumerRef[];
   }
@@ -210,7 +259,7 @@ export class RestRegistryClient implements RegistryClient {
     from: string,
     to: string,
   ): Promise<DiffReport | null> {
-    const path = `/v1/orgs/${org}/projects/${project}/contracts/${base}/versions/${to}/diff?from=${encodeURIComponent(from)}`;
+    const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}/versions/${enc(to)}/diff?from=${encodeURIComponent(from)}`;
     try {
       return await this.get<DiffReport>(path);
     } catch (err) {
@@ -253,23 +302,28 @@ export class RestRegistryClient implements RegistryClient {
       (c) => c.latestVerdict && c.latestVerdict !== 'SAFE',
     );
 
-    // All (versions → diff) lookups run concurrently per candidate contract.
-    const verdicts = await Promise.all(
-      candidates.map(async (c) => {
-        const versions = await this.listVersions(c.org, c.project, c.base);
-        if (versions.length < 2) return null;
-        const diff = await this.getDiff(
-          c.org,
-          c.project,
-          c.base,
-          versions[versions.length - 2].version,
-          versions[versions.length - 1].version,
-        );
-        return diff && diff.verdict !== 'SAFE' ? diff : null;
-      }),
-    );
-    const recentBreaking = verdicts.filter((d): d is DiffReport => d !== null);
-    recentBreaking.sort((a, b) => (a.to < b.to ? 1 : -1));
+    // All (versions → diff) lookups run with bounded concurrency (8 in
+    // flight) so a large registry can never exhaust sockets or hammer the
+    // service, and the attention list is ordered by the target version's
+    // publish time — a lexicographic version sort puts 0.10.0 before 0.9.0.
+    const verdicts = await mapBounded(candidates, 8, async (c) => {
+      const versions = await this.listVersions(c.org, c.project, c.base);
+      if (versions.length < 2) return null;
+      const target = versions[versions.length - 1];
+      const diff = await this.getDiff(
+        c.org,
+        c.project,
+        c.base,
+        versions[versions.length - 2].version,
+        target.version,
+      );
+      if (!diff || diff.verdict === 'SAFE') return null;
+      return { diff, publishedAt: target.publishedAt };
+    });
+    const recentBreaking = verdicts
+      .filter((v): v is { diff: DiffReport; publishedAt: string } => v !== null)
+      .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+      .map((v) => v.diff);
     return {
       contracts: contracts.length,
       versions: contracts.reduce((n, c) => n + c.versionCount, 0),
@@ -306,7 +360,6 @@ export class RestRegistryClient implements RegistryClient {
         };
       }),
       recentBreaking,
-      objectCount: contracts.reduce((n, c) => n + c.versionCount, 0),
       lastPublishAt: publishes[0]?.at,
     };
   }
@@ -366,23 +419,30 @@ export class DemoRegistryClient implements RegistryClient {
   getOverview(): Promise<OverviewData> {
     return Promise.resolve(demoGetOverview());
   }
-  publishers(org: string, project: string, base: string) {
-    return demoPublishers(org, project, base);
-  }
 }
 
-/** Extra demo-only helpers surface on the demo client; shared base type. */
-export interface RegistryClientWithHelpers extends RegistryClient {
-  publishers?(org: string, project: string, base: string): ReturnType<typeof demoPublishers>;
-}
+let cached: RegistryClient | null = null;
 
-let cached: RegistryClientWithHelpers | null = null;
-
-/** Returns the process-wide registry client (demo or REST, per env). */
-export function getRegistryClient(): RegistryClientWithHelpers {
+/**
+ * Returns the process-wide registry client (demo or REST, per env).
+ *
+ * Throws (never silently falls back to demo) when the deployment asks for
+ * live mode but does not configure a registry URL — serving fabricated data
+ * there would be worse than an honest, actionable error page.
+ */
+export function getRegistryClient(): RegistryClient {
   if (!cached) {
-    const url = registryBaseUrl();
-    cached = url ? new RestRegistryClient(url) : new DemoRegistryClient();
+    if (isDemoMode()) {
+      cached = new DemoRegistryClient();
+    } else {
+      const raw = process.env.NEXT_PUBLIC_REGISTRY_URL;
+      if (raw === undefined || raw === '') {
+        throw new Error(
+          'RegistryMisconfigured: live mode is enabled but NEXT_PUBLIC_REGISTRY_URL is not set. Point it at the registry service (e.g. http://localhost:4350), or set NEXT_PUBLIC_DEMO_MODE=true for the zero-backend demo.',
+        );
+      }
+      cached = new RestRegistryClient(raw);
+    }
   }
   return cached;
 }

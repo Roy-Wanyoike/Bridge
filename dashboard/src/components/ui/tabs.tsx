@@ -129,7 +129,7 @@ function TabsContent({ value, className, ...props }: TabsContentProps) {
       id={`${baseId}-panel-${value}`}
       aria-labelledby={`${baseId}-tab-${value}`}
       tabIndex={0}
-      className={cn('mt-5 focus-visible:outline-none', className)}
+      className={cn('mt-5 rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring', className)}
       {...props}
     />
   );

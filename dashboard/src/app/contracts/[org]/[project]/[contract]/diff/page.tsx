@@ -75,12 +75,14 @@ export default async function DiffPage({
   );
   if (versions.length === 0) notFound();
 
-  const from = versions.some((v) => v.version === sp.from)
-    ? sp.from!
-    : versions[versions.length - 2]?.version ?? versions[0].version;
-  const to = versions.some((v) => v.version === sp.to)
-    ? sp.to!
-    : versions[versions.length - 1].version;
+  // Explicit but unknown from/to in a shared deep link must 404 — silently
+  // rendering a different diff than the link promised erodes trust.
+  if (sp.from !== undefined && !versions.some((v) => v.version === sp.from)) notFound();
+  if (sp.to !== undefined && !versions.some((v) => v.version === sp.to)) notFound();
+
+  const from =
+    sp.from ?? versions[versions.length - 2]?.version ?? versions[0].version;
+  const to = sp.to ?? versions[versions.length - 1].version;
 
   const report = await client.getDiff(org, project, contract, from, to);
   if (!report) notFound();
@@ -96,7 +98,7 @@ export default async function DiffPage({
           Contracts
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-        <Link href={`/contracts/${org}/${project}/${contract}`} className="font-mono hover:text-foreground">
+        <Link href={`/contracts/${encodeURIComponent(org)}/${encodeURIComponent(project)}/${encodeURIComponent(contract)}`} className="font-mono hover:text-foreground">
           {contract}
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
@@ -195,8 +197,11 @@ export default async function DiffPage({
               />
             ) : (
               <ol className="flex flex-col gap-3">
-                {report.changes.map((change) => (
-                  <ChangeRow key={`${change.path}-${change.kind}`} change={change} />
+                {report.changes.map((change, idx) => (
+                  <ChangeRow
+                    key={`${idx}-${change.path}-${change.kind}`}
+                    change={change}
+                  />
                 ))}
               </ol>
             )}
@@ -228,7 +233,7 @@ export default async function DiffPage({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <Link
-                        href={`/contracts/${c.org ?? org}/${c.project ?? project}/${c.packageName.replace(/\.v\d+$/, '')}`}
+                        href={`/contracts/${encodeURIComponent(c.org ?? org)}/${encodeURIComponent(c.project ?? project)}/${encodeURIComponent(c.packageName.replace(/\.v\d+$/, ''))}`}
                         className="font-mono text-[13px] hover:text-primary"
                       >
                         {c.packageName}

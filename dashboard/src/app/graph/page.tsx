@@ -28,8 +28,13 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
   const sp = await searchParams;
   const org = sp.org ?? '';
   const client = getRegistryClient();
-  const graph = await client.getGraph(org || undefined);
-  const contracts = await client.listAllContracts();
+  // Graph, full contract list and org tabs are independent — one batched
+  // round instead of a serial cascade.
+  const [graph, contracts, orgs] = await Promise.all([
+    client.getGraph(org || undefined),
+    client.listAllContracts(),
+    client.listOrgs(),
+  ]);
   // Key by the fully-qualified storage key — duplicate bases across orgs
   // must not collide.
   const byBase = new Map(contracts.map((c) => [`${c.org}/${c.project}/${c.base}`, c]));
@@ -38,8 +43,6 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
   const consumerRows = scoped
     .filter((c) => c.consumers > 0)
     .sort((a, b) => b.consumers - a.consumers);
-
-  const orgs = await client.listOrgs();
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -55,7 +58,7 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
             (tab) => (
               <Link
                 key={tab.key}
-                href={tab.key ? `/graph?org=${tab.key}` : '/graph'}
+                href={tab.key ? `/graph?org=${encodeURIComponent(tab.key)}` : '/graph'}
                 aria-current={org === tab.key ? 'page' : undefined}
                 className={cn(
                   'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
@@ -108,7 +111,7 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
                     <TableRow key={`${c.org}/${c.project}/${c.base}`}>
                       <TableCell>
                         <Link
-                          href={`/contracts/${c.org}/${c.project}/${c.base}`}
+                          href={`/contracts/${encodeURIComponent(c.org)}/${encodeURIComponent(c.project)}/${encodeURIComponent(c.base)}`}
                           className="font-mono text-[13px] hover:text-primary"
                         >
                           {c.base}
@@ -153,7 +156,7 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
                   <TableRow key={n.id}>
                     <TableCell>
                       <Link
-                        href={`/contracts/${n.org}/${n.project}/${n.base}`}
+                        href={`/contracts/${encodeURIComponent(n.org)}/${encodeURIComponent(n.project)}/${encodeURIComponent(n.base)}`}
                         className="font-mono text-[13px] hover:text-primary"
                       >
                         {n.base}

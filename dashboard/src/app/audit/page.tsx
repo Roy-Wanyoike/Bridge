@@ -48,16 +48,21 @@ export default async function AuditPage({ searchParams }: { searchParams: SP }) 
   const contract = sp.contract ?? '';
 
   const client = getRegistryClient();
-  // One fetch of the trail; the actor dropdown options and the filtered view
-  // are both derived client-side (the API would otherwise be hit twice).
-  const allEntries = await client.listAudit();
+  // The action/actor filters are applied server-side (the audit API supports
+  // them); the actor dropdown needs the unfiltered actor set, so both fetches
+  // run in parallel. The contract filter stays client-side because the view
+  // matches substrings, which the API does not.
+  const [allEntries, filteredEntries] = await Promise.all([
+    client.listAudit(),
+    client.listAudit({
+      action: action || undefined,
+      actor: actor || undefined,
+    }),
+  ]);
   const actors = [...new Set(allEntries.map((e) => e.actor))].sort();
-  const entries = allEntries.filter((e) => {
-    if (action && e.action !== action) return false;
-    if (actor && e.actor !== actor) return false;
-    if (contract && !e.contract.toLowerCase().includes(contract.toLowerCase())) return false;
-    return true;
-  });
+  const entries = contract
+    ? filteredEntries.filter((e) => e.contract.toLowerCase().includes(contract.toLowerCase()))
+    : filteredEntries;
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -147,7 +152,7 @@ export default async function AuditPage({ searchParams }: { searchParams: SP }) 
                   <TableCell className="whitespace-nowrap text-muted-foreground">{e.actor}</TableCell>
                   <TableCell>
                     <Link
-                      href={`/contracts/${e.org}/${e.project}/${e.contract}`}
+                      href={`/contracts/${encodeURIComponent(e.org)}/${encodeURIComponent(e.project)}/${encodeURIComponent(e.contract)}`}
                       className="font-mono text-[13px] hover:text-primary"
                     >
                       {e.contract}
