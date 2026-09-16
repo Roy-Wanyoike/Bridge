@@ -1,6 +1,6 @@
 {
   "name": "@bridge/lsp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Language Server Protocol server for the Bridge IDL — JSON-RPC over stdio, zero dependencies beyond @bridge/core",
   "license": "MIT",
   "main": "dist/index.js",

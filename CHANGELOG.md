@@ -5,6 +5,42 @@ All notable changes to Bridge are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — production-readiness pass
+
+### Fixed
+
+- **Dashboard: live-by-default production builds** (#74): demo mode no
+  longer serves fabricated registry data in production when
+  `NEXT_PUBLIC_DEMO_MODE` is forgotten — prod starts live and fails loud
+  with an actionable `RegistryMisconfigured` error; `next dev` keeps the
+  zero-setup demo default.
+- **Dashboard: demo disclosure on mobile** (#75): compact DEMO/LIVE chip
+  in the header row below 1024px.
+- **Dashboard: honest error boundary** (#76): registry failures are
+  detected by stable message prefixes across the RSC serialization
+  boundary — the tailored "check NEXT_PUBLIC_REGISTRY_URL" copy now
+  actually renders.
+- **Dashboard: data-layer performance** (#77): contract detail batches
+  all adjacent-pair diffs in one round (was N−1 serial); overview fan-out
+  capped at 8 in flight; graph page fetches parallelized; audit filters
+  applied server-side.
+- **Dashboard: URL correctness** (#78): every registry path segment and
+  data-built link is percent-encoded; diff deep links with unknown
+  versions return 404 instead of silently rendering a different diff.
+- **Dashboard: trust batch** (#79): fabricated "objects in the store"
+  metric removed; publish-time-ordered attention list; org-scoped
+  project dropdown; scope switcher only on /contracts; live-mode default
+  port corrected to 4350; repository link rendered as a real anchor;
+  demo severity no longer inflates affected counts.
+- **Dashboard: accessibility** (#80): dialog background made inert,
+  visible tabpanel focus, verdict text in graph node labels, full
+  language names in badge aria-labels, prefers-reduced-motion guard,
+  skip-to-content link, no skipped heading levels, dead code removed.
+- **Lint: zero warnings everywhere** (#81): the registry-service and
+  generator warning sites fixed honestly — including a real latent bug
+  where the Java sample value for a json-typed field emitted
+  syntactically invalid Java; lint gate tightened to `--max-warnings 0`.
+
 ## [0.2.0] — the platform era
 
 ### Added

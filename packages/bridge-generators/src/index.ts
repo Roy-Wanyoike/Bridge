@@ -33,7 +33,7 @@ export type { TargetLanguage, GeneratedFile } from './gen/input';
 export type { GenerateOptions } from './options';
 
 /** Version of the generator; embedded in every generated file header. */
-export const GENERATOR_VERSION = '0.2.0';
+export const GENERATOR_VERSION = '0.2.1';
 
 /**
  * Generates a full language project from a compiled Bridge IR package.

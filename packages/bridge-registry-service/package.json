@@ -1,6 +1,6 @@
 {
   "name": "@bridge/registry-service",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bridge registry service: multi-tenant HTTP registry API with OIDC auth, artifact signing, audit logs, rate limiting and pluggable storage (in-memory / PostgreSQL)",
   "license": "MIT",
   "main": "dist/index.js",

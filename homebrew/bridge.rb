@@ -18,7 +18,7 @@ class Bridge < Formula
   # Release checklist: bump to the tag version (and pin the sha256 lines
   # below) when cutting a release — the workflow guard asserts this equals
   # the pushed tag.
-  version "0.2.0"
+  version "0.2.1"
   license "MIT"
 
   # sha256 is :no_check until the release checklist step replaces it with

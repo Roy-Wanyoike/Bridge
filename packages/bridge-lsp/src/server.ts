@@ -50,7 +50,7 @@ import { typeDeclToText } from './render';
 import { ErrorCodes, type JsonRpcErrorBody, type JsonRpcMessage } from './jsonrpc';
 
 export const SERVER_NAME = 'bridge-lsp';
-export const SERVER_VERSION = '0.2.0';
+export const SERVER_VERSION = '0.2.1';
 
 /** Options a host may customize when embedding the server. */
 export interface ServerOptions {

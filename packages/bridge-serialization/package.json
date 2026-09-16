@@ -1,6 +1,6 @@
 {
   "name": "@bridge/serialization",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Cross-language serialization for Bridge values: canonical JSON, MessagePack, CBOR round-trips",
   "license": "MIT",
   "main": "dist/index.js",

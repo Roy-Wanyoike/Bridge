@@ -85,7 +85,7 @@ export function openApiDocument(_options?: RegistryServiceOptions): Record<strin
     openapi: '3.1.0',
     info: {
       title: 'Bridge Registry Service',
-      version: '0.2.0',
+      version: '0.2.1',
       description:
         'Multi-tenant contract registry for Bridge: publish immutable, content-addressed ' +
         'contract versions; query versions, consumers and dependency graphs; diff any two ' +

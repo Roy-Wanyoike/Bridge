@@ -1,6 +1,6 @@
 {
   "name": "@bridge/compat",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bridge compatibility engine: diff, classification, impact analysis",
   "license": "MIT",
   "main": "dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@bridge/ffi",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bridge FFI generator: carries one contract across language boundaries as FUNCTIONS — Rust C-ABI dynamic library + Go cgo client + WASM bindings with TypeScript wrappers.",
   "license": "MIT",
   "main": "dist/index.js",

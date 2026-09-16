@@ -1,6 +1,6 @@
 {
   "name": "bridge-monorepo",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Bridge \u2014 One contract. Every language. Zero interoperability drift.",
   "license": "MIT",

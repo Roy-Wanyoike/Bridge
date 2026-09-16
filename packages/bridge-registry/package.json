@@ -1,6 +1,6 @@
 {
   "name": "@bridge/registry",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bridge contract registry: publish, pull, versions, inspect",
   "license": "MIT",
   "main": "dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@bridge/cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "The bridge command line interface",
   "license": "MIT",
   "main": "dist/index.js",
