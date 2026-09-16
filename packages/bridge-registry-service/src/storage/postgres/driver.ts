@@ -35,7 +35,7 @@ import { PgClient, PgError, parseDsn, type PgConnectOptions } from './wire';
 export { PgClient, PgError, parseDsn };
 export type { PgConnectOptions };
 
-interface Row extends Record<string, string | null> {}
+type Row = Record<string, string | null>;
 
 function isPgError(err: unknown): err is PgError {
   return err instanceof PgError;

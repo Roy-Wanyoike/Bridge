@@ -312,7 +312,7 @@ test('impact: missing --to and unknown --format are usage errors (exit 2)', () =
   const g = setupGraph('impact-usage');
   const missing = run(['impact', 'payments.v1', '--registry', g.registry]);
   assert.equal(missing.status, 2);
-  assert.match(missing.stderr, /'--to <name\@version\|file>' is missing/);
+  assert.match(missing.stderr, /'--to <name@version\|file>' is missing/);
   const badFormat = run(['impact', 'payments.v1', '--to', g.candidate, '--registry', g.registry, '--format', 'yaml']);
   assert.equal(badFormat.status, 2);
   assert.match(badFormat.stderr, /unknown --format 'yaml'/);
@@ -387,7 +387,7 @@ test('check: single file without --against is a usage error (exit 2)', () => {
 test('help: impact command is documented with its options', () => {
   const r = run(['help', 'impact']);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /bridge impact <contract> --to <name\@version\|file>/);
+  assert.match(r.stdout, /bridge impact <contract> --to <name@version\|file>/);
   assert.match(r.stdout, /--format <fmt>/);
   assert.match(r.stdout, /--strict/);
 });
@@ -395,12 +395,12 @@ test('help: impact command is documented with its options', () => {
 test('help: check documents --against and --strict', () => {
   const r = run(['help', 'check']);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /--against <ref-file\|name\@version>/);
+  assert.match(r.stdout, /--against <ref-file\|name@version>/);
   assert.match(r.stdout, /--strict/);
 });
 
 test('help: general usage lists the impact command', () => {
   const r = run(['help']);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /^  impact <contract> --to <ref>/m);
+  assert.match(r.stdout, /^ {2}impact <contract> --to <ref>/m);
 });

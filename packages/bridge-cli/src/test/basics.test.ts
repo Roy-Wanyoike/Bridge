@@ -272,7 +272,7 @@ test('fmt -w rewrites the file in place; second run reports clean', () => {
   assert.match(first.stdout, /✓ formatted .*ugly\.bridge/);
 
   const formatted = fs.readFileSync(file, 'utf8');
-  assert.match(formatted, /^    amount: int64$/m); // canonical 4-space indent
+  assert.match(formatted, /^ {4}amount: int64$/m); // canonical 4-space indent
   assert.match(formatted, /^package shop\.v1\n\n/m); // blank line restored
 
   const second = run(['fmt', file]);

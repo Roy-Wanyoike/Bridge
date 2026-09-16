@@ -103,7 +103,12 @@ export async function request(
   method: string,
   path: string,
   opts: { body?: unknown; token?: string; headers?: Record<string, string> } = {},
-): Promise<{ status: number; json: any; headers: Record<string, string | string[] | undefined> }> {
+): Promise<{
+  // Integration-test helper: response bodies are intentionally untyped —
+  // every test asserts its own shape — so `json` stays loose by design.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  status: number; json: any; headers: Record<string, string | string[] | undefined>;
+}> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.token !== undefined) headers['authorization'] = `Bearer ${opts.token}`;
   let body: Buffer | undefined;
@@ -118,7 +123,7 @@ export async function request(
     redirect: 'manual',
   });
   const text = await response.text();
-  let json: any = null;
+  let json: unknown = null;
   try {
     json = JSON.parse(text);
   } catch {

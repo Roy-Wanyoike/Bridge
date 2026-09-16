@@ -2223,7 +2223,10 @@ function javaSampleValueFor(ref: TypeRef, input: GeneratorInput, depth: number):
       if (p === 'bool') return { lines: [], expr: 'true' };
       if (STRING_LIKE_PRIMITIVES.has(p)) return { lines: [], expr: '"sample"' };
       if (p === 'bytes') return { lines: [], expr: '"c2FtcGxl".getBytes()' };
-      if (p === 'json') return { lines: [], expr: 'BridgeJson.parse("{\"k\":1}")' };
+      // Java source must read BridgeJson.parse("{\"k\":1}") — the backslashes
+      // are part of the emitted string literal, so they need \\ in this
+      // single-quoted TS literal.
+      if (p === 'json') return { lines: [], expr: 'BridgeJson.parse("{\\"k\\":1}")' };
       if (p === 'float32') return { lines: [], expr: '1.5f' };
       if (p === 'float64') return { lines: [], expr: '1.5d' };
       if (p === 'int32') return { lines: [], expr: '1' };

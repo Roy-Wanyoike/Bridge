@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -149,8 +149,7 @@ test('Python: generated code parses with ast.parse and round-trips functionally'
       const target = join(dir, file.path);
       execFileSync('mkdir', ['-p', join(dir, 'payments_v1')]);
       // Write with the module layout preserved
-      const fsWrite = (p: string, c: string) => require('node:fs').writeFileSync(p, c);
-      fsWrite(target, file.content);
+      writeFileSync(target, file.content);
     }
     // Syntax check every module
     for (const file of files) {

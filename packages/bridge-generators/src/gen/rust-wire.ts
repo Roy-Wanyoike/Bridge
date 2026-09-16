@@ -299,7 +299,7 @@ export function rustServerPrelude(): string {
   out += 'pub(crate) fn write_http_response(\n';
   out += '    stream: &mut std::net::TcpStream,\n';
   out += '    status: u16,\n';
-  out += '    body: &serde_json::Value,\n',
+  out += '    body: &serde_json::Value,\n';
   out += ') {\n';
   out += '    use std::io::Write;\n';
   out += '    let raw = serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string());\n';

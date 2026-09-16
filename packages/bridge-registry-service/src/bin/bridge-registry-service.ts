@@ -14,6 +14,7 @@
 
 import { readFileSync } from 'node:fs';
 import { start } from '../server';
+import { FileAuditSink } from '../audit';
 import { InMemoryDriver } from '../storage/memory';
 import { PostgresDriver, parseDsn } from '../storage/postgres/driver';
 import type { PgConnectOptions } from '../storage/postgres/driver';
@@ -326,9 +327,6 @@ function run(argv: string[]): number {
   try {
     const options = buildOptions(config);
     if (config.auditFile !== undefined) {
-      // Lazy import avoided on purpose: the FileAuditSink lives in audit.ts
-      // and is part of this package.
-      const { FileAuditSink } = require('../audit') as typeof import('../audit');
       const driverBackend = options.driver;
       options.audit = {
         append: async (entry) => {
