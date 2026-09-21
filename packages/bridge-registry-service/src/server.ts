@@ -522,6 +522,8 @@ async function publish(
   const meta: PublishMeta = {};
   if (typeof metaRaw['description'] === 'string') meta.description = metaRaw['description'].slice(0, 2048);
   if (typeof metaRaw['repository'] === 'string') meta.repository = metaRaw['repository'].slice(0, 2048);
+  const languages = normalizeLanguages(metaRaw['languages']);
+  if (languages !== undefined) meta.languages = languages;
 
   const publishTime =
     typeof body['publishTime'] === 'string' && body['publishTime'].length > 0
@@ -545,6 +547,46 @@ async function publish(
 }
 
 // ------------------------------------------------------------------ helpers
+
+/** Bounds for the publish meta languages list (issue #104). */
+const MAX_LANGUAGES = 16;
+const MAX_LANGUAGE_LENGTH = 32;
+const LANGUAGE_PATTERN = /^[a-z][a-z0-9+#.-]*$/;
+
+/**
+ * Validate and normalize the publish meta languages list: trimmed,
+ * lowercased, deduped (first occurrence wins), bounded. Returns `undefined`
+ * when the field is absent so storage stays minimal for publishers that
+ * don't track languages.
+ */
+export function normalizeLanguages(raw: unknown): string[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new ServiceError(400, 'invalid_argument', 'body.meta.languages must be an array of strings');
+  }
+  if (raw.length > MAX_LANGUAGES) {
+    throw new ServiceError(400, 'invalid_argument', `body.meta.languages must have at most ${MAX_LANGUAGES} entries`);
+  }
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'string') {
+      throw new ServiceError(400, 'invalid_argument', 'body.meta.languages must be an array of strings');
+    }
+    const lang = entry.trim().toLowerCase();
+    if (
+      lang.length === 0 || lang.length > MAX_LANGUAGE_LENGTH || !LANGUAGE_PATTERN.test(lang)
+    ) {
+      throw new ServiceError(
+        400,
+        'invalid_argument',
+        `body.meta.languages entries must be lowercase identifiers of at most ${MAX_LANGUAGE_LENGTH} ` +
+          `characters matching ${LANGUAGE_PATTERN.source} (got ${JSON.stringify(entry)})`,
+      );
+    }
+    if (!out.includes(lang)) out.push(lang);
+  }
+  return out;
+}
 
 function clientIp(req: IncomingMessage): string | null {
   return req.socket.remoteAddress ?? null;

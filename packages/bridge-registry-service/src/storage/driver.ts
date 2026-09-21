@@ -55,6 +55,7 @@ export function buildMeta(input: PublishInput, base: string, version: string, ha
   };
   if (input.meta.description !== undefined) meta.description = input.meta.description;
   if (input.meta.repository !== undefined) meta.repository = input.meta.repository;
+  if (input.meta.languages !== undefined) meta.languages = [...input.meta.languages];
   return meta;
 }
 

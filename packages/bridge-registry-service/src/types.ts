@@ -231,6 +231,13 @@ export interface AuditBackend {
 export interface PublishMeta {
   description?: string;
   repository?: string;
+  /**
+   * Languages the published artifact was generated for (issue #104), e.g.
+   * `['go', 'typescript']`. Normalized client-side/server-side: trimmed,
+   * lowercased, deduped, bounded (16 entries, 32 chars each). Rendered by
+   * the dashboard as language badges in live mode.
+   */
+  languages?: string[];
 }
 
 /**
@@ -256,6 +263,8 @@ export interface ContractMeta extends PublishMeta {
   publishedAt: string;
   /** Principal that published this version. */
   publishedBy?: string;
+  /** Generated languages recorded at publish time (issue #104). */
+  languages?: string[];
 }
 
 export interface PublishInput {

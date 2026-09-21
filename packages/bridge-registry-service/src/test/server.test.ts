@@ -576,3 +576,60 @@ test('audit from/to bounds must be valid ISO-8601 (issue #48)', async () => {
     assert.equal(ok.status, 200);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Publish meta languages (issue #104): recorded, normalized, validated.
+// ---------------------------------------------------------------------------
+
+test('publish records normalized meta.languages and echoes them on reads', async () => {
+  await withServer({}, async ({ url }) => {
+    const path = '/v1/orgs/acme/projects/payments/contracts/payments.v1';
+    const created = await request(url, 'PUT', path, {
+      token: WRITE,
+      body: { ir: makeIR(), meta: { languages: ['Go', ' TypeScript ', 'go', 'python'] } },
+    });
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.json.meta.languages, ['go', 'typescript', 'python']);
+
+    const pulled = await request(url, 'GET', path, { token: READ });
+    assert.equal(pulled.status, 200);
+    assert.deepEqual(pulled.json.meta.languages, ['go', 'typescript', 'python']);
+
+    // Replay (same IR) keeps the recorded languages from the first publish.
+    const replayed = await request(url, 'PUT', path, {
+      token: WRITE,
+      body: { ir: makeIR(), meta: { languages: ['rust'] } },
+    });
+    assert.equal(replayed.status, 200);
+    assert.equal(replayed.json.outcome, 'replayed');
+    assert.deepEqual(replayed.json.meta.languages, ['go', 'typescript', 'python']);
+  });
+});
+
+test('publish without meta.languages omits the field entirely', async () => {
+  await withServer({}, async ({ url }) => {
+    const path = '/v1/orgs/acme/projects/payments/contracts/bare.v1';
+    const created = await request(url, 'PUT', path, { token: WRITE, body: { ir: makeIR('bare.v1') } });
+    assert.equal(created.status, 201);
+    assert.equal(created.json.meta.languages, undefined);
+    assert.ok(!('languages' in created.json.meta));
+  });
+});
+
+test('publish rejects malformed meta.languages shapes with 400', async () => {
+  await withServer({}, async ({ url }) => {
+    const path = '/v1/orgs/acme/projects/payments/contracts/bad.v1';
+    const cases: unknown[] = [
+      'go,typescript',              // string, not array
+      [42],                          // non-string entry
+      ['Go TS'],                     // space not allowed by the identifier pattern
+      ['-leading-dash'],             // must start with a letter
+      Array.from({ length: 17 }, (_, i) => `lang${i}`), // over the cap
+    ];
+    for (const languages of cases) {
+      const r = await request(url, 'PUT', path, { token: WRITE, body: { ir: makeIR('bad.v1'), meta: { languages } } });
+      assert.equal(r.status, 400, `expected 400 for languages=${JSON.stringify(languages)}, got ${r.status}`);
+      assert.equal(r.json.error.code, 'invalid_argument');
+    }
+  });
+});
