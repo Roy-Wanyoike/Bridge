@@ -18,10 +18,22 @@
  * onto those errors so the existing `registryCliError()` hints apply;
  * service-level failures (auth, rate limits, tampering) become `CliError`s
  * with actionable messages.
+ *
+ * Artifact signing (issue #103): when the service runs with ed25519
+ * signing `required`, publishes must carry `x-bridge-key-id` and
+ * `x-bridge-signature` headers — an ed25519 signature over the canonical
+ * JSON of the request body, verified by the service against the public
+ * half configured for that key id. The CLI loads the private key from
+ * `--signing-key-file` (or `BRIDGE_SIGNING_KEY`) and names it with
+ * `--signing-key-id` (or `BRIDGE_SIGNING_KEY_ID`). Both halves are
+ * required together; unsigned publishes to optional-mode services remain
+ * valid and pass the signature when signed.
  */
-import { RegistryError } from '@bridge/registry';
-import type { IRPackage } from '@bridge/core';
+import { createPrivateKey, sign as cryptoSign, type KeyObject } from 'node:crypto';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { canonicalJson, type IRPackage } from '@bridge/core';
+import { RegistryError } from '@bridge/registry';
 import { ParsedArgs } from './args';
 import { CliError } from './errors';
 
@@ -44,6 +56,100 @@ interface HttpOptions {
   readonly requireOrgProject?: boolean;
   /** Commands whose HTTP form must NOT receive --owner (publish). */
   readonly rejectOwner?: boolean;
+}
+
+/** ed25519 signing material for publishes (issue #103). */
+export interface SigningMaterial {
+  /** Key id configured in the service's `signing.keys`. */
+  readonly keyId: string;
+  /** PEM-encoded ed25519 private key (PKCS#8 or SEC1). */
+  readonly privateKeyPem: string;
+}
+
+const ENV_SIGNING_KEY = 'BRIDGE_SIGNING_KEY';
+const ENV_SIGNING_KEY_ID = 'BRIDGE_SIGNING_KEY_ID';
+
+/**
+ * Resolve optional publish-signing material: `--signing-key-file` (PEM path)
+ * or `BRIDGE_SIGNING_KEY` (PEM inline), named by `--signing-key-id` or
+ * `BRIDGE_SIGNING_KEY_ID`. Key and key id are required together — a lone
+ * half is a usage error before any request is made. Returns `undefined`
+ * when the caller asked for neither.
+ */
+export function resolveSigningMaterial(args: ParsedArgs): SigningMaterial | undefined {
+  const keyFile = args.values.get('--signing-key-file');
+  const keyId = args.values.get('--signing-key-id') ?? process.env[ENV_SIGNING_KEY_ID];
+
+  let pem: string | undefined;
+  if (keyFile !== undefined) {
+    let raw: Buffer;
+    try {
+      raw = fs.readFileSync(keyFile);
+    } catch (e) {
+      throw new CliError(
+        `registry: cannot read --signing-key-file '${keyFile}': ${(e as Error).message}`,
+        2,
+      );
+    }
+    pem = raw.toString('utf8');
+  } else {
+    const envKey = process.env[ENV_SIGNING_KEY];
+    if (envKey !== undefined && envKey.length > 0) pem = envKey;
+  }
+
+  if (pem === undefined && keyId === undefined) return undefined;
+  if (pem === undefined) {
+    throw new CliError(
+      `registry: a signing key id was given ('${keyId}') but no private key — ` +
+        `pass --signing-key-file <pem-path> or set ${ENV_SIGNING_KEY}`,
+      2,
+    );
+  }
+  if (keyId === undefined || keyId.length === 0) {
+    throw new CliError(
+      `registry: a signing key was given but no key id — pass --signing-key-id <id> ` +
+        `or set ${ENV_SIGNING_KEY_ID} (the id must match a key configured on the service)`,
+      2,
+    );
+  }
+  const material: SigningMaterial = { keyId, privateKeyPem: pem };
+  // Fail fast on an unreadable or non-ed25519 key — a usage error (exit 2)
+  // raised before any request is made, not a mid-publish failure.
+  loadEd25519PrivateKey(material);
+  return material;
+}
+
+/** Load the PEM into an ed25519 KeyObject or fail with an actionable error. */
+function loadEd25519PrivateKey(material: SigningMaterial): KeyObject {
+  let key: KeyObject;
+  try {
+    key = createPrivateKey(material.privateKeyPem);
+  } catch (e) {
+    throw new CliError(
+      `registry: --signing-key-file does not contain a readable private key: ${(e as Error).message}`,
+      2,
+    );
+  }
+  if (key.asymmetricKeyType !== 'ed25519') {
+    throw new CliError(
+      `registry: signing key for '${material.keyId}' is ${String(key.asymmetricKeyType)}, ` +
+        'but the registry service verifies ed25519 signatures only — generate one with `openssl genpkey -algorithm ed25519`',
+      2,
+    );
+  }
+  return key;
+}
+
+/**
+ * Sign the canonical JSON of the publish body (issue #103): the exact
+ * message the service verifies — `@bridge/registry`'s re-export of
+ * `canonicalJson` over the body object as sent. Returns the base64
+ * signature for the `x-bridge-signature` header.
+ */
+export function signPublishBody(material: SigningMaterial, body: unknown): string {
+  const key = loadEd25519PrivateKey(material);
+  const message = Buffer.from(canonicalJson(body), 'utf8');
+  return cryptoSign(null, message, key).toString('base64');
 }
 
 /**
@@ -121,6 +227,7 @@ async function request(
   method: 'GET' | 'POST',
   path: string,
   body?: unknown,
+  extraHeaders?: Record<string, string>,
 ): Promise<ServiceResponse> {
   let response: Response;
   try {
@@ -129,6 +236,7 @@ async function request(
       headers: {
         authorization: `Bearer ${target.token}`,
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+        ...(extraHeaders ?? {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -157,6 +265,9 @@ async function request(
   };
 }
 
+/** Server error codes for artifact-signature failures (distinct from auth). */
+const SIGNATURE_ERROR_CODES = new Set(['signature-required', 'invalid-signature']);
+
 /** Server error codes shared 1:1 with the store's RegistryError union. */
 const STORE_ERROR_CODES = new Set(['not-found', 'immutable', 'hash-conflict', 'invalid-name', 'invalid-version', 'corrupt']);
 
@@ -170,6 +281,15 @@ function assertOk(response: ServiceResponse, context: string): void {
       : undefined;
   const serverCode = typeof err?.code === 'string' ? err.code : undefined;
   const serverMessage = typeof err?.message === 'string' ? err.message : `HTTP ${response.status}`;
+
+  if (response.status === 401 && serverCode !== undefined && SIGNATURE_ERROR_CODES.has(serverCode)) {
+    throw new CliError(
+      `registry: publish rejected for ${context} — ${serverMessage}. ` +
+        'Sign the publish with an ed25519 key: pass --signing-key-id <id> and ' +
+        '--signing-key-file <pem> (or BRIDGE_SIGNING_KEY_ID / BRIDGE_SIGNING_KEY) ' +
+        'where <id> is configured on the service',
+    );
+  }
 
   switch (response.status) {
     case 401:
@@ -232,6 +352,7 @@ export async function httpPublish(
   meta: { description?: string; repository?: string },
   version: string | undefined,
   contentHash: string,
+  signing?: SigningMaterial,
 ): Promise<{ outcome: string; meta: RemoteContractMeta }> {
   const coords = `/v1/orgs/${encodeURIComponent(target.org as string)}/projects/${encodeURIComponent(
     target.project as string,
@@ -241,7 +362,16 @@ export async function httpPublish(
   if (meta.description !== undefined || meta.repository !== undefined) {
     body['meta'] = meta;
   }
-  const response = await request(target, 'POST', `${coords}/contracts/${encodeURIComponent(packageName)}`, body);
+  // Sign the body exactly as it will be sent (issue #103): the service
+  // canonicalizes the parsed request body, so the signature covers the
+  // same semantic JSON regardless of serialization details.
+  const headers = signing === undefined ? undefined : {
+    'x-bridge-key-id': signing.keyId,
+    'x-bridge-signature': signPublishBody(signing, body),
+  };
+  const response = await request(
+    target, 'POST', `${coords}/contracts/${encodeURIComponent(packageName)}`, body, headers,
+  );
   assertOk(response, `publishing ${packageName}`);
   if (response.body === null || typeof response.body !== 'object' || typeof response.body['meta'] !== 'object') {
     throw new CliError(`registry: publish response for ${packageName} had an unexpected shape`);

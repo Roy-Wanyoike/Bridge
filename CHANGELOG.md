@@ -41,6 +41,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where the Java sample value for a json-typed field emitted
   syntactically invalid Java; lint gate tightened to `--max-warnings 0`.
 
+### Added
+
+- **Signed HTTP publish** (#103): `bridge publish --registry <url>` can
+  sign the publish payload with an ed25519 key
+  (`--signing-key-id` + `--signing-key-file`, or `BRIDGE_SIGNING_KEY_ID`
+  / `BRIDGE_SIGNING_KEY`), so registry services configured with required
+  artifact signing accept CLI publishes. Wrong keys, unknown key ids and
+  missing keys fail loudly with actionable errors; seven integration
+  tests cover required/optional modes.
+
 ## [0.2.0] — the platform era
 
 ### Added
