@@ -20,7 +20,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@bridge/registry-service": "*"
   },
   "bin": {
     "bridge": "dist/bin/bridge.js"

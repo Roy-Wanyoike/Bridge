@@ -55,19 +55,31 @@ const COMMANDS: Record<string, CommandEntry> = {
     run: impact.run,
   },
   publish: {
-    spec: { options: ['--registry', '--owner', '--description', '--version'] },
+    spec: { options: ['--registry', '--owner', '--description', '--version', '--token', '--org', '--project'] },
     run: publish.run,
   },
-  pull: { spec: { options: ['--registry', '--out'] }, run: pull.run },
-  versions: { spec: { options: ['--registry'] }, run: versions.run },
-  inspect: { spec: { options: ['--registry'] }, run: inspect.run },
-  search: { spec: { options: ['--registry'] }, run: search.run },
+  pull: {
+    spec: { options: ['--registry', '--out', '--token', '--org', '--project'] },
+    run: pull.run,
+  },
+  versions: {
+    spec: { options: ['--registry', '--token', '--org', '--project'] },
+    run: versions.run,
+  },
+  inspect: {
+    spec: { options: ['--registry', '--token', '--org', '--project'] },
+    run: inspect.run,
+  },
+  search: {
+    spec: { options: ['--registry', '--token', '--org', '--project'] },
+    run: search.run,
+  },
   doctor: { spec: { options: ['--registry'] }, run: doctor.run },
   version: { spec: {}, run: version.run },
   help: { spec: {}, run: help.run },
 };
 
-export function main(argv: readonly string[]): void {
+export async function main(argv: readonly string[]): Promise<void> {
   if (argv.length === 0) {
     errOut(GENERAL_USAGE);
     process.exitCode = 2;
@@ -86,7 +98,7 @@ export function main(argv: readonly string[]): void {
 
   try {
     const parsed = parseArgs(argv.slice(1), entry.spec, command);
-    entry.run(parsed);
+    await entry.run(parsed);
   } catch (e) {
     fail(command, e);
   }

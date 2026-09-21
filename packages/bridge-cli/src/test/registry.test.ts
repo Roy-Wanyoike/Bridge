@@ -239,58 +239,56 @@ test('search: no matches exits 0 with a friendly message', () => {
 });
 
 // ---------------------------------------------------------------------------
-// HTTP(S) registry targets are rejected, never silently written to disk
-// (issue #90)
+// HTTP(S) registry usage errors (issues #90/#91): an HTTP target is never
+// treated as a directory, and the HTTP path fails loudly on missing
+// credentials/coordinates before any request or filesystem write.
 // ---------------------------------------------------------------------------
 
-test('publish: --registry http:// URL is rejected without creating anything', () => {
+test('publish: --registry http:// URL without a token is a usage error (exit 2)', () => {
   const dir = fresh('reject-publish');
   const file = writeFile(dir, 'payments.bridge', PAYMENTS_V1);
   const r = run(['publish', file, '--registry', 'http://127.0.0.1:4400']);
   assert.equal(r.status, 2);
-  assert.match(r.all, /HTTP\(S\) URL, but this command talks to a filesystem registry/);
+  assert.match(r.all, /HTTP\(S\) registry — authentication is required/);
+  assert.match(r.all, /BRIDGE_TOKEN/);
   assert.ok(!fs.existsSync(path.join(dir, 'http:')), 'no URL-named directory may be created');
 });
 
-test('publish: --registry https:// URL is rejected the same way', () => {
-  const dir = fresh('reject-publish-https');
+test('publish: --owner is rejected for HTTP registries (publishedBy comes from the credential)', () => {
+  const dir = fresh('reject-publish-owner');
   const file = writeFile(dir, 'payments.bridge', PAYMENTS_V1);
-  const r = run(['publish', file, '--registry', 'https://registry.example.com']);
+  const r = run([
+    'publish', file, '--registry', 'http://127.0.0.1:4400',
+    '--token', 't', '--org', 'acme', '--project', 'payments', '--owner', 'team',
+  ]);
   assert.equal(r.status, 2);
-  assert.match(r.all, /HTTP\(S\) URL/);
+  assert.match(r.all, /--owner applies to filesystem registries only/);
 });
 
-test('publish: BRIDGE_REGISTRY=http:// env is rejected', () => {
-  const dir = fresh('reject-publish-env');
+test('publish: HTTP registry without --org/--project is a usage error', () => {
+  const dir = fresh('reject-publish-coords');
   const file = writeFile(dir, 'payments.bridge', PAYMENTS_V1);
-  const r = run(['publish', file], { env: { BRIDGE_REGISTRY: 'http://127.0.0.1:4400' } });
+  const r = run(['publish', file, '--registry', 'http://127.0.0.1:4400', '--token', 't']);
   assert.equal(r.status, 2);
-  assert.match(r.all, /HTTP\(S\) URL/);
-  assert.ok(!fs.existsSync(path.join(dir, 'http:')));
+  assert.match(r.all, /needs tenancy coordinates/);
 });
 
-test('versions: --registry http:// URL is rejected', () => {
+test('versions: HTTP registry without a token is a usage error', () => {
   const r = run(['versions', 'payments.v1', '--registry', 'http://127.0.0.1:4400']);
   assert.equal(r.status, 2);
-  assert.match(r.all, /HTTP\(S\) URL/);
+  assert.match(r.all, /authentication is required/);
 });
 
-test('inspect: --registry http:// URL is rejected', () => {
-  const r = run(['inspect', 'payments.v1', '--registry', 'http://127.0.0.1:4400']);
+test('doctor: filesystem-only command rejects URL --registry (issue #90 invariant)', () => {
+  const r = run(['doctor', '--registry', 'http://127.0.0.1:4400']);
   assert.equal(r.status, 2);
-  assert.match(r.all, /HTTP\(S\) URL/);
+  assert.match(r.all, /HTTP\(S\) URL, but this command talks to a filesystem registry/);
 });
 
-test('search: --registry http:// URL is rejected', () => {
-  const r = run(['search', 'payment', '--registry', 'http://127.0.0.1:4400']);
+test('check: filesystem-only --against registry rejects URL --registry', () => {
+  const dir = fresh('reject-check');
+  const file = writeFile(dir, 'payments.bridge', PAYMENTS_V1);
+  const r = run(['check', file, '--against', 'payments.v1', '--registry', 'http://127.0.0.1:4400']);
   assert.equal(r.status, 2);
-  assert.match(r.all, /HTTP\(S\) URL/);
-});
-
-test('pull: --registry http:// URL is rejected', () => {
-  const dir = fresh('reject-pull');
-  const r = run(['pull', 'payments.v1', 'v1', '--registry', 'http://127.0.0.1:4400', '--out', path.join(dir, 'ir.json')]);
-  assert.equal(r.status, 2);
-  assert.match(r.all, /HTTP\(S\) URL/);
-  assert.ok(!fs.existsSync(path.join(dir, 'ir.json')));
+  assert.match(r.all, /HTTP\(S\) URL, but this command talks to a filesystem registry/);
 });

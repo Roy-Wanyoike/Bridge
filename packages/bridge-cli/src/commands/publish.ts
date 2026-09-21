@@ -1,15 +1,17 @@
 /**
- * `bridge publish <file> [--registry dir] [--owner name]
- *        [--description text] [--version vX]` — publish to the local
- * content-addressed registry.
+ * `bridge publish <file> [--registry dir|url] [--org org] [--project project]
+ *        [--token tok] [--owner name] [--description text] [--version vX]` —
+ * publish to a filesystem registry or an HTTP registry service.
  */
-import { RegistryStore, PublishMeta } from '@bridge/registry';
+import { hashPackage } from '@bridge/core';
+import { PublishMeta, RegistryStore } from '@bridge/registry';
 import { ParsedArgs, positionals } from '../args';
 import { compileOrThrow } from '../compile';
 import { out, CHECK } from '../output';
 import { registryCliError, registryDir } from '../registry-cli';
+import { httpPublish, RegistryTarget, resolveRegistryTarget } from '../registry-http';
 
-export function run(args: ParsedArgs): void {
+export async function run(args: ParsedArgs): Promise<void> {
   const pos = positionals(args, 'publish', '<file>', 1, 1);
   const file = pos[0] as string;
 
@@ -20,9 +22,39 @@ export function run(args: ParsedArgs): void {
   if (description !== undefined) meta.description = description;
   const version = args.values.get('--version');
 
+  const target: RegistryTarget = resolveRegistryTarget(args, {
+    command: 'publish',
+    requireOrgProject: true,
+    rejectOwner: true,
+  });
+
   const { ir } = compileOrThrow(file);
-  const root = registryDir(args);
-  const store = new RegistryStore(root);
+
+  if (target.kind === 'http') {
+    try {
+      const { outcome, meta: remote } = await httpPublish(
+        target,
+        ir.name,
+        ir,
+        { description: meta.description },
+        version,
+        hashPackage(ir),
+      );
+      out(
+        `${CHECK} published ${remote.packageName}@${remote.version} (hash ${remote.shortHash})` +
+          (outcome === 'replayed' ? ' — identical content already published' : ''),
+      );
+      out(`    registry: ${target.baseUrl} (org ${remote.org}, project ${remote.project})`);
+      if (remote.publishedBy !== undefined) out(`    publishedBy: ${remote.publishedBy}`);
+      if (remote.description !== undefined) out(`    description: ${remote.description}`);
+      if (remote.imports.length > 0) out(`    imports: ${remote.imports.join(', ')}`);
+    } catch (e) {
+      throw registryCliError(e);
+    }
+    return;
+  }
+
+  const store = new RegistryStore(registryDir(args));
 
   let published;
   try {

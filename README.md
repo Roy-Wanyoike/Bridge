@@ -142,6 +142,25 @@ bridge generate --language go  # also: rust | typescript | python | java | cshar
 bridge doctor
 ```
 
+### Publish to a registry
+
+The CLI talks to both a local, content-addressed registry directory **and** a running [registry service](packages/bridge-registry-service) over HTTP:
+
+```sh
+# local registry (default ./.bridge-registry)
+bridge publish payments.bridge --owner team-pay
+
+# HTTP registry service (auth + tenancy)
+bridge-registry-service --port 4350 --token devsecret=acme:admin &
+bridge publish payments.bridge \
+  --registry http://localhost:4350 \
+  --org acme --project payments --token devsecret
+bridge versions payments.v1 --registry http://localhost:4350 \
+  --org acme --project payments --token devsecret
+```
+
+`bridge pull`, `versions`, `inspect` and `search` accept the same `--registry` form; see `bridge help publish`.
+
 Requires Node.js >= 22.
 
 Read the [Quickstart](docs/QUICKSTART.md), the [IDL reference](docs/IDL_REFERENCE.md), and the [compatibility guide](docs/COMPATIBILITY.md). Browse the [runnable examples](examples/) — including [versioning](examples/versioning), a complete BREAKING diff, and [go-python](examples/go-python), a live round-trip of generated code.

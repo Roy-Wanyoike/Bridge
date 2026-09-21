@@ -1,7 +1,12 @@
 /**
- * Registry helpers: root-directory resolution (--registry > BRIDGE_REGISTRY
- * > ./.bridge-registry) and translation of RegistryError codes into
- * friendly CLI errors with actionable hints.
+ * Registry helpers for filesystem-backed commands: root-directory resolution
+ * (--registry > BRIDGE_REGISTRY > ./.bridge-registry) and translation of
+ * RegistryError codes into friendly CLI errors with actionable hints.
+ *
+ * Commands that also speak HTTP (publish/pull/versions/inspect/search) use
+ * {@link ./registry-http!resolveRegistryTarget} instead; this module keeps
+ * the filesystem-only commands (doctor, check, impact) honest about their
+ * filesystem-only registries.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -11,18 +16,19 @@ import { CliError, describeError } from './errors';
 
 export const DEFAULT_REGISTRY_DIR = '.bridge-registry';
 
-/** HTTP(S) registry targets are not filesystem directories — fail fast. */
-export function isHttpRegistryTarget(target: string): boolean {
-  return /^https?:\/\//i.test(target);
-}
-
-/** Resolve the registry root for the current invocation. */
+/**
+ * Resolve the registry root for a filesystem-only command.
+ *
+ * HTTP(S) targets are rejected with a usage error — never silently written
+ * to disk as a directory (issue #90). Commands with HTTP support resolve
+ * through `resolveRegistryTarget()` instead.
+ */
 export function registryDir(args: ParsedArgs): string {
   const flag = args.values.get('--registry');
   const env = process.env['BRIDGE_REGISTRY'];
   const target = flag ?? (env !== undefined && env.length > 0 ? env : undefined);
   if (target !== undefined) {
-    if (isHttpRegistryTarget(target)) {
+    if (/^https?:\/\//i.test(target)) {
       throw new CliError(
         `registry: '${target}' is an HTTP(S) URL, but this command talks to a filesystem registry`,
         2,
