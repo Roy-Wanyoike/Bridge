@@ -55,7 +55,12 @@ const COMMANDS: Record<string, CommandEntry> = {
     run: impact.run,
   },
   publish: {
-    spec: { options: ['--registry', '--owner', '--description', '--version', '--token', '--org', '--project'] },
+    spec: {
+      options: [
+        '--registry', '--owner', '--description', '--version', '--token', '--org', '--project',
+        '--signing-key-id', '--signing-key-file',
+      ],
+    },
     run: publish.run,
   },
   pull: {

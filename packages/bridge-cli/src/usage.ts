@@ -173,6 +173,7 @@ registry/compile failures; 2 on usage errors.`,
   publish: `bridge publish <file> [--registry dir|url] [--owner name]
                   [--description text] [--version vX]
                   [--org org] [--project project] [--token token]
+                  [--signing-key-id id] [--signing-key-file pem]
 
 Compile a contract and publish it to a registry — immutable and
 content-addressed by the hash of its canonical IR.
@@ -200,6 +201,13 @@ Options:
   --org <org>           organization (HTTP registries; or BRIDGE_ORG)
   --project <project>   project (HTTP registries; or BRIDGE_PROJECT)
   --token <token>       bearer token (HTTP registries; or BRIDGE_TOKEN)
+  --signing-key-id <id> ed25519 key id configured on the service (HTTP
+                        publish signing; or BRIDGE_SIGNING_KEY_ID)
+  --signing-key-file <pem>
+                        PEM ed25519 private key used to sign the publish
+                        (or BRIDGE_SIGNING_KEY with the PEM inline). Both
+                        the key and its id are required together; services
+                        with required signing reject unsigned publishes.
 
 Exit 1 when the version already exists with different content (versions
 are immutable — publish a new version instead). Exit 2 on usage errors

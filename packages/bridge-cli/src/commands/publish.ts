@@ -1,6 +1,7 @@
 /**
  * `bridge publish <file> [--registry dir|url] [--org org] [--project project]
- *        [--token tok] [--owner name] [--description text] [--version vX]` —
+ *        [--token tok] [--owner name] [--description text] [--version vX]
+ *        [--signing-key-id id] [--signing-key-file pem]` —
  * publish to a filesystem registry or an HTTP registry service.
  */
 import { hashPackage } from '@bridge/core';
@@ -9,7 +10,7 @@ import { ParsedArgs, positionals } from '../args';
 import { compileOrThrow } from '../compile';
 import { out, CHECK } from '../output';
 import { registryCliError, registryDir } from '../registry-cli';
-import { httpPublish, RegistryTarget, resolveRegistryTarget } from '../registry-http';
+import { httpPublish, RegistryTarget, resolveRegistryTarget, resolveSigningMaterial } from '../registry-http';
 
 export async function run(args: ParsedArgs): Promise<void> {
   const pos = positionals(args, 'publish', '<file>', 1, 1);
@@ -27,6 +28,9 @@ export async function run(args: ParsedArgs): Promise<void> {
     requireOrgProject: true,
     rejectOwner: true,
   });
+  // Optional ed25519 artifact signing (issue #103): both halves (key + key
+  // id) or neither; a lone half is a usage error before any I/O.
+  const signing = resolveSigningMaterial(args);
 
   const { ir } = compileOrThrow(file);
 
@@ -39,6 +43,7 @@ export async function run(args: ParsedArgs): Promise<void> {
         { description: meta.description },
         version,
         hashPackage(ir),
+        signing,
       );
       out(
         `${CHECK} published ${remote.packageName}@${remote.version} (hash ${remote.shortHash})` +

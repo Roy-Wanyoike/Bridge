@@ -157,6 +157,12 @@ bridge publish payments.bridge \
   --org acme --project payments --token devsecret
 bridge versions payments.v1 --registry http://localhost:4350 \
   --org acme --project payments --token devsecret
+
+# signed publish for services that require ed25519 artifact signatures
+bridge publish payments.bridge \
+  --registry http://localhost:4350 \
+  --org acme --project payments --token devsecret \
+  --signing-key-id release-key --signing-key-file release-key.pem
 ```
 
 `bridge pull`, `versions`, `inspect` and `search` accept the same `--registry` form; see `bridge help publish`.

@@ -168,6 +168,15 @@ change anything: `dependents` (exposed via the registry API — see the
 [registry example](../examples/registry)) lists contracts that import
 yours.
 
+Publishing to a running [registry service](../packages/bridge-registry-service)
+adds authentication and tenancy (`--registry <url> --org org --project
+project --token token`), and — when the service is configured with
+required ed25519 artifact signing — a signature: pass
+`--signing-key-id <id> --signing-key-file <private-key.pem>` (or
+`BRIDGE_SIGNING_KEY_ID` / `BRIDGE_SIGNING_KEY`) with a key whose public
+half is configured on the service. The signature covers the canonical
+JSON of the publish payload, so any content change invalidates it.
+
 ## 7. Troubleshoot your setup
 
 ```sh

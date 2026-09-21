@@ -6,6 +6,7 @@
  * byte-identical cross-process IR round-trip.
  */
 import { spawn } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { after, test } from 'node:test';
@@ -31,6 +32,25 @@ const server: Server = start(
 const PORT = (server.address() as { port: number }).port;
 const URL_ = `http://127.0.0.1:${PORT}`;
 
+// ---------------------------------------------------------------------------
+// Signing server (issue #103): ed25519 signature verification in REQUIRED
+// mode — publishes without a valid signature are rejected with 401.
+// ---------------------------------------------------------------------------
+const { publicKey: signPublic, privateKey: signPrivate } = generateKeyPairSync('ed25519');
+const SIGN_PUBLIC_PEM = signPublic.export({ format: 'pem', type: 'spki' }) as string;
+const SIGN_PRIVATE_PEM = signPrivate.export({ format: 'pem', type: 'pkcs8' }) as string;
+const SIGN_KID = 'release-key';
+const signedServer: Server = start(
+  {
+    driver: new InMemoryDriver(),
+    auth: { tokens: { [TOKEN]: { tenant: 'acme', role: 'admin' } } },
+    rateLimit: { enabled: false },
+    signing: { keys: { [SIGN_KID]: SIGN_PUBLIC_PEM } },
+  },
+  0,
+);
+const SIGNED_URL = `http://127.0.0.1:${(signedServer.address() as { port: number }).port}`;
+
 const tempRoots: string[] = [];
 function fresh(label: string): string {
   const dir = tmpdir(label);
@@ -40,6 +60,7 @@ function fresh(label: string): string {
 after(() => {
   for (const dir of tempRoots) fs.rmSync(dir, { recursive: true, force: true });
   server.close();
+  signedServer.close();
 });
 
 /** Publish a contract file over HTTP; asserts success. */
@@ -251,4 +272,146 @@ test('http registry: BRIDGE_TOKEN/BRIDGE_ORG/BRIDGE_PROJECT env forms work', asy
   });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /✓ published payments\.v1@v1/);
+});
+
+// ---------------------------------------------------------------------------
+// Artifact signing (issue #103): the CLI signs publishes with an ed25519
+// key so required-mode registry services accept them.
+// ---------------------------------------------------------------------------
+
+test('http registry: unsigned publish is rejected by a required-signing service with an actionable error', async () => {
+  const dir = fresh('http-sign-required');
+  const file = writeFile(dir, 'payments.bridge', PAYMENTS_V1);
+  const r = await runAsync([
+    'publish', file, '--registry', SIGNED_URL, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+  ]);
+  assert.equal(r.status, 1);
+  assert.match(r.all, /publish rejected/);
+  assert.match(r.all, /--signing-key-id .* --signing-key-file/);
+});
+
+test('http registry: signed publish (--signing-key-file + --signing-key-id) is accepted by a required-signing service', async () => {
+  const dir = fresh('http-sign-ok');
+  const file = writeFile(dir, 'payments.bridge', PAYMENTS_V1);
+  const keyFile = writeFile(dir, 'release-key.pem', SIGN_PRIVATE_PEM);
+  const r = await runAsync([
+    'publish', file,
+    '--registry', SIGNED_URL, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+    '--signing-key-file', keyFile, '--signing-key-id', SIGN_KID,
+  ]);
+  assert.equal(r.status, 0, `signed publish failed: ${r.all}`);
+  assert.match(r.stdout, /✓ published payments\.v1@v1/);
+
+  // The signed artifact is really there.
+  const versions = await runAsync([
+    'versions', 'payments.v1', '--registry', SIGNED_URL, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+  ]);
+  assert.equal(versions.status, 0);
+  assert.match(versions.stdout, /payments\.v1 \(1 version\(s\)/);
+});
+
+test('http registry: signed publish with the WRONG key fails signature verification and stores nothing', async () => {
+  const dir = fresh('http-sign-wrong');
+  // A package no other test publishes successfully, so the storage probe
+  // below proves the rejected publish left nothing behind.
+  const file = writeFile(dir, 'wrongkey.bridge', `package signing.wrong.v1\n\ntype Note {\n    text: string\n}\n`);
+  const wrong = generateKeyPairSync('ed25519');
+  const wrongPem = wrong.privateKey.export({ format: 'pem', type: 'pkcs8' }) as string;
+  const keyFile = writeFile(dir, 'wrong-key.pem', wrongPem);
+  const r = await runAsync([
+    'publish', file,
+    '--registry', SIGNED_URL, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+    '--signing-key-file', keyFile, '--signing-key-id', SIGN_KID,
+  ]);
+  assert.equal(r.status, 1);
+  assert.match(r.all, /publish rejected/);
+  assert.match(r.all, /verification failed|signature/i);
+  // The service must not have stored anything.
+  const versions = await runAsync([
+    'versions', 'signing.wrong.v1', '--registry', SIGNED_URL, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+  ]);
+  assert.match(versions.all, /not-found|no versions|unknown route/i);
+});
+
+test('http registry: signing material via BRIDGE_SIGNING_KEY / BRIDGE_SIGNING_KEY_ID env forms', async () => {
+  const dir = fresh('http-sign-env');
+  const file = writeFile(dir, 'payments.bridge', PAYMENTS_V1);
+  const r = await runAsync(['publish', file, '--registry', SIGNED_URL, '--token', TOKEN, '--org', 'acme', '--project', 'payments'], {
+    env: { BRIDGE_SIGNING_KEY: SIGN_PRIVATE_PEM, BRIDGE_SIGNING_KEY_ID: SIGN_KID },
+  });
+  assert.equal(r.status, 0, `env-signed publish failed: ${r.all}`);
+  assert.match(r.stdout, /✓ published payments\.v1@v1/);
+});
+
+test('http registry: a lone signing half is a usage error before any request', async () => {
+  const dir = fresh('http-sign-half');
+  const file = writeFile(dir, 'payments.bridge', PAYMENTS_V1);
+  const keyOnly = await runAsync([
+    'publish', file, '--registry', SIGNED_URL, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+    '--signing-key-id', SIGN_KID,
+  ]);
+  assert.equal(keyOnly.status, 2);
+  assert.match(keyOnly.all, /no private key/);
+
+  const keyFile = writeFile(dir, 'release-key.pem', SIGN_PRIVATE_PEM);
+  const idOnly = await runAsync([
+    'publish', file, '--registry', SIGNED_URL, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+    '--signing-key-file', keyFile,
+  ]);
+  assert.equal(idOnly.status, 2);
+  assert.match(idOnly.all, /no key id/);
+});
+
+test('http registry: optional-mode service accepts BOTH signed and unsigned publishes', async () => {
+  // Optional mode (keys configured, mode: 'optional'): unsigned publishes
+  // pass, provided signatures must still verify against a known key — a
+  // signature that names an unknown key id is rejected even in optional
+  // mode (fail-closed against tampering).
+  const optionalServer: Server = start(
+    {
+      driver: new InMemoryDriver(),
+      auth: { tokens: { [TOKEN]: { tenant: 'acme', role: 'admin' } } },
+      rateLimit: { enabled: false },
+      signing: { keys: { [SIGN_KID]: SIGN_PUBLIC_PEM }, mode: 'optional' },
+    },
+    0,
+  );
+  const optionalUrl = `http://127.0.0.1:${(optionalServer.address() as { port: number }).port}`;
+  try {
+    const dir = fresh('http-sign-optional');
+    const fileA = writeFile(dir, 'signed.bridge', `package signing.optional.signed.v1\n\ntype A {\n    x: string\n}\n`);
+    const keyFile = writeFile(dir, 'release-key.pem', SIGN_PRIVATE_PEM);
+    const signed = await runAsync([
+      'publish', fileA,
+      '--registry', optionalUrl, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+      '--signing-key-file', keyFile, '--signing-key-id', SIGN_KID,
+    ]);
+    assert.equal(signed.status, 0, `optional-mode signed publish failed: ${signed.all}`);
+    assert.match(signed.stdout, /✓ published signing\.optional\.signed\.v1@v1/);
+
+    const fileB = writeFile(dir, 'unsigned.bridge', `package signing.optional.unsigned.v1\n\ntype B {\n    y: string\n}\n`);
+    const unsigned = await runAsync([
+      'publish', fileB, '--registry', optionalUrl, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+    ]);
+    assert.equal(unsigned.status, 0, `optional-mode unsigned publish failed: ${unsigned.all}`);
+    assert.match(unsigned.stdout, /✓ published signing\.optional\.unsigned\.v1@v1/);
+  } finally {
+    optionalServer.close();
+  }
+});
+
+test('http registry: non-ed25519 signing key is rejected client-side with guidance', async () => {
+  const dir = fresh('http-sign-noted25519');
+  const file = writeFile(dir, 'payments.bridge', PAYMENTS_V1);
+  const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const rsaPem = rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }) as string;
+  const keyFile = writeFile(dir, 'rsa-key.pem', rsaPem);
+  const r = await runAsync([
+    'publish', file,
+    '--registry', SIGNED_URL, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+    '--signing-key-file', keyFile, '--signing-key-id', SIGN_KID,
+  ]);
+  assert.equal(r.status, 2);
+  assert.match(r.all, /ed25519/);
+  assert.match(r.all, /openssl genpkey/);
 });
