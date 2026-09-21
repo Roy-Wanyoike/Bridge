@@ -104,7 +104,7 @@ see [docs/FFI.md](docs/FFI.md).
 
 ## Status
 
-**Bridge 0.2.1 — the roadmap through Phase 3 is shipped and tested: 699 tests green across nine packages (CLI 113, compat 101, core 154, FFI 11, generators 32, LSP 33, registry 65, registry-service 78, serialization 112), every generated language compile-verified, the Go↔Rust FFI proven end to end on real builds, and the CLI publishes to the registry service over HTTP.** See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
+**Bridge 0.2.1 — the roadmap through Phase 3 is shipped and tested: 711 tests green across nine packages (CLI 122, compat 101, core 154, FFI 11, generators 32, LSP 33, registry 65, registry-service 81, serialization 112), every generated language compile-verified, the Go↔Rust FFI proven end to end on real builds, and the CLI publishes to the registry service over HTTP — with optional ed25519 signing for required-mode services and recorded generated-language metadata that lights up the dashboard's live badges.** See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
 
 | Area | Status |
 |------|--------|
@@ -163,6 +163,12 @@ bridge publish payments.bridge \
   --registry http://localhost:4350 \
   --org acme --project payments --token devsecret \
   --signing-key-id release-key --signing-key-file release-key.pem
+
+# record the generated languages (rendered as badges in the dashboard)
+bridge publish payments.bridge \
+  --registry http://localhost:4350 \
+  --org acme --project payments --token devsecret \
+  --language go,typescript,rust,python
 ```
 
 `bridge pull`, `versions`, `inspect` and `search` accept the same `--registry` form; see `bridge help publish`.
@@ -218,7 +224,7 @@ npm run build
 npm test
 ```
 
-Requires Node.js >= 22. The test suite covers all nine packages (699 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets.
+Requires Node.js >= 22. The test suite covers all nine packages (711 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets.
 
 ## Contributing
 
