@@ -50,6 +50,11 @@ function assertPublishMeta(meta: PublishMeta): void {
       throw new TypeError(`publish(): meta.${field} must be a string when provided`);
     }
   }
+  if (meta.languages !== undefined) {
+    if (!Array.isArray(meta.languages) || meta.languages.some((l) => typeof l !== 'string')) {
+      throw new TypeError('publish(): meta.languages must be an array of strings when provided');
+    }
+  }
 }
 
 export class InMemoryDriver implements StorageDriver {

@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Publish language metadata** (#104): `bridge publish --registry <url>
+  --language go,typescript` records the generated languages on the
+  published version (service-side validation: lowercase identifiers,
+  deduped, ≤16), echoes them in contract meta, documents them in the
+  OpenAPI schema, and lights up the dashboard's language badges in live
+  mode — previously honestly empty there.
 - **Signed HTTP publish** (#103): `bridge publish --registry <url>` can
   sign the publish payload with an ed25519 key
   (`--signing-key-id` + `--signing-key-file`, or `BRIDGE_SIGNING_KEY_ID`

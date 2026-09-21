@@ -269,7 +269,7 @@ export class PostgresDriver implements StorageDriver {
           ir.name,
           hash,
           JSON.stringify(ir),
-          JSON.stringify({ description: meta.description, repository: meta.repository }),
+          JSON.stringify({ description: meta.description, repository: meta.repository, languages: meta.languages }),
           JSON.stringify(meta.imports),
           meta.publishedAt,
           meta.publishedBy ?? null,
@@ -588,7 +588,7 @@ function requireVersionMatch(given: string, derived: string): string {
 
 function rowToMeta(row: Row, org: string, project: string): ContractMeta {
   const hash = row['hash'] as string;
-  const extras = JSON.parse(row['meta'] ?? '{}') as { description?: string; repository?: string };
+  const extras = JSON.parse(row['meta'] ?? '{}') as { description?: string; repository?: string; languages?: string[] };
   const meta: ContractMeta = {
     org,
     project,
@@ -603,6 +603,7 @@ function rowToMeta(row: Row, org: string, project: string): ContractMeta {
   if (typeof row['published_by'] === 'string') meta.publishedBy = row['published_by'];
   if (extras.description !== undefined) meta.description = extras.description;
   if (extras.repository !== undefined) meta.repository = extras.repository;
+  if (Array.isArray(extras.languages)) meta.languages = extras.languages;
   return meta;
 }
 

@@ -58,7 +58,7 @@ const COMMANDS: Record<string, CommandEntry> = {
     spec: {
       options: [
         '--registry', '--owner', '--description', '--version', '--token', '--org', '--project',
-        '--signing-key-id', '--signing-key-file',
+        '--signing-key-id', '--signing-key-file', '--language',
       ],
     },
     run: publish.run,

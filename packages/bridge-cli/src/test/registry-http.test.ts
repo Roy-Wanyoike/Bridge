@@ -415,3 +415,47 @@ test('http registry: non-ed25519 signing key is rejected client-side with guidan
   assert.match(r.all, /ed25519/);
   assert.match(r.all, /openssl genpkey/);
 });
+
+// ---------------------------------------------------------------------------
+// Generated-language metadata (issue #104): --language list is recorded on
+// HTTP publishes and echoed through inspect.
+// ---------------------------------------------------------------------------
+
+test('http registry: --language list is recorded and echoed by inspect', async () => {
+  const dir = fresh('http-languages');
+  const file = writeFile(dir, 'languages.bridge', `package languages.v1\n\ntype Widget {\n    id: string\n}\n`);
+  const r = await runAsync([
+    'publish', file,
+    '--registry', URL_, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+    '--language', 'Go, TypeScript,go,python',
+  ]);
+  assert.equal(r.status, 0, `publish with --language failed: ${r.all}`);
+
+  const inspect = await runAsync([
+    'inspect', 'languages.v1', '--registry', URL_, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+  ]);
+  assert.equal(inspect.status, 0);
+  assert.match(inspect.stdout, /languages: go, typescript, python/);
+});
+
+test('http registry: invalid --language lists fail with a usage error before any request', async () => {
+  const dir = fresh('http-languages-bad');
+  const file = writeFile(dir, 'languages.bridge', `package languages.v1\n\ntype Widget {\n    id: string\n}\n`);
+  const bad = await runAsync([
+    'publish', file,
+    '--registry', URL_, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+    '--language', 'go, Has Space',
+  ]);
+  assert.equal(bad.status, 2);
+  assert.match(bad.all, /--language entries must be lowercase identifiers/);
+  assert.match(bad.all, /bridge help publish/);
+
+  // Over the cap.
+  const many = await runAsync([
+    'publish', file,
+    '--registry', URL_, '--token', TOKEN, '--org', 'acme', '--project', 'payments',
+    '--language', Array.from({ length: 17 }, (_, i) => `lang${i}`).join(','),
+  ]);
+  assert.equal(many.status, 2);
+  assert.match(many.all, /at most 16 entries/);
+});

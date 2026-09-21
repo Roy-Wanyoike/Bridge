@@ -342,6 +342,8 @@ export interface RemoteContractMeta {
   description?: string;
   repository?: string;
   publishedBy?: string;
+  /** Generated languages recorded at publish time (issue #104). */
+  languages?: string[];
 }
 
 /** `bridge publish` over HTTP. */
@@ -349,7 +351,7 @@ export async function httpPublish(
   target: Extract<RegistryTarget, { kind: 'http' }>,
   packageName: string,
   ir: IRPackage,
-  meta: { description?: string; repository?: string },
+  meta: { description?: string; repository?: string; languages?: string[] },
   version: string | undefined,
   contentHash: string,
   signing?: SigningMaterial,
@@ -359,7 +361,7 @@ export async function httpPublish(
   )}`;
   const body: Record<string, unknown> = { packageName, ir, contentHash };
   if (version !== undefined) body['version'] = version;
-  if (meta.description !== undefined || meta.repository !== undefined) {
+  if (meta.description !== undefined || meta.repository !== undefined || meta.languages !== undefined) {
     body['meta'] = meta;
   }
   // Sign the body exactly as it will be sent (issue #103): the service

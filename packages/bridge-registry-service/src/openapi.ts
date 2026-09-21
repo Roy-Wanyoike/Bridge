@@ -75,6 +75,11 @@ export function openApiDocument(_options?: RegistryServiceOptions): Record<strin
       publishedBy: { type: 'string' },
       description: { type: 'string' },
       repository: { type: 'string' },
+      languages: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Generated languages recorded at publish time (issue #104)',
+      },
     },
   };
 

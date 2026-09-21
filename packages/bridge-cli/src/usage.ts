@@ -174,6 +174,7 @@ registry/compile failures; 2 on usage errors.`,
                   [--description text] [--version vX]
                   [--org org] [--project project] [--token token]
                   [--signing-key-id id] [--signing-key-file pem]
+                  [--language go,typescript]
 
 Compile a contract and publish it to a registry — immutable and
 content-addressed by the hash of its canonical IR.
@@ -208,6 +209,10 @@ Options:
                         (or BRIDGE_SIGNING_KEY with the PEM inline). Both
                         the key and its id are required together; services
                         with required signing reject unsigned publishes.
+  --language <list>     comma-separated generated languages recorded with
+                        the publish (HTTP registries; e.g.
+                        "go,typescript"), rendered as badges in the
+                        dashboard. Lowercase identifiers, at most 16.
 
 Exit 1 when the version already exists with different content (versions
 are immutable — publish a new version instead). Exit 2 on usage errors

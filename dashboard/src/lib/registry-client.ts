@@ -210,6 +210,8 @@ interface ServiceContractMeta {
   description?: string;
   repository?: string;
   publishedBy?: string;
+  /** Generated languages recorded at publish time (issue #104). */
+  languages?: string[];
 }
 
 function isServiceContractMeta(v: unknown): v is ServiceContractMeta {
@@ -313,8 +315,9 @@ export class RestRegistryClient implements RegistryClient {
   /**
    * Project storage meta into the UI summary: derive versionCount,
    * direct-dependent count and the latest adjacent-version verdict from the
-   * routes that genuinely serve them; leave `languages` empty (the service
-   * does not record generated languages — no fabrication).
+   * routes that genuinely serve them; take `languages` from the publish
+   * metadata the service records (issue #104) and leave it empty for
+   * contracts published without the field — never fabricated.
    */
   private async summarize(org: string, project: string, meta: ServiceContractMeta): Promise<ContractSummary> {
     let versionCount = 1;
@@ -363,7 +366,11 @@ export class RestRegistryClient implements RegistryClient {
       firstPublishedAt: meta.publishedAt,
       updatedAt: meta.publishedAt,
       consumers,
-      languages: [],
+      // Languages recorded at publish time (issue #104); an empty array
+      // stays honest for contracts published without the field.
+      languages: Array.isArray(meta.languages)
+        ? (meta.languages.filter((l): l is Language => typeof l === 'string') as Language[])
+        : [],
       latestVerdict,
     };
   }
@@ -434,7 +441,10 @@ export class RestRegistryClient implements RegistryClient {
         publisher: meta.publishedBy ?? '',
         owner: '',
         repository: meta.repository,
-        languages: [],
+        // Languages recorded at publish time (issue #104).
+        languages: Array.isArray(meta.languages)
+          ? (meta.languages.filter((l): l is Language => typeof l === 'string') as Language[])
+          : [],
         schema: {
           types: Array.isArray(ir.types) ? (ir.types as { name?: unknown }[]).map((t) => String(t?.name ?? '')) : [],
           enums: [],

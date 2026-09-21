@@ -66,6 +66,7 @@ export async function run(args: ParsedArgs): Promise<void> {
     if (meta.publishedBy !== undefined) out(`    publishedBy: ${meta.publishedBy}`);
     if (meta.description !== undefined) out(`    description: ${meta.description}`);
     if (meta.repository !== undefined) out(`    repository: ${meta.repository}`);
+    if (meta.languages !== undefined && meta.languages.length > 0) out(`    languages: ${meta.languages.join(', ')}`);
     if (meta.publishedAt !== undefined) out(`    published: ${meta.publishedAt}`);
     out(`    types: ${shape.types}`);
     out(`    services: ${shape.services}`);
