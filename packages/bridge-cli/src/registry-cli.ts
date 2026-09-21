@@ -11,12 +11,25 @@ import { CliError, describeError } from './errors';
 
 export const DEFAULT_REGISTRY_DIR = '.bridge-registry';
 
+/** HTTP(S) registry targets are not filesystem directories — fail fast. */
+export function isHttpRegistryTarget(target: string): boolean {
+  return /^https?:\/\//i.test(target);
+}
+
 /** Resolve the registry root for the current invocation. */
 export function registryDir(args: ParsedArgs): string {
   const flag = args.values.get('--registry');
-  if (flag !== undefined) return flag;
   const env = process.env['BRIDGE_REGISTRY'];
-  if (env !== undefined && env.length > 0) return env;
+  const target = flag ?? (env !== undefined && env.length > 0 ? env : undefined);
+  if (target !== undefined) {
+    if (isHttpRegistryTarget(target)) {
+      throw new CliError(
+        `registry: '${target}' is an HTTP(S) URL, but this command talks to a filesystem registry`,
+        2,
+      );
+    }
+    return target;
+  }
   return path.join(process.cwd(), DEFAULT_REGISTRY_DIR);
 }
 
