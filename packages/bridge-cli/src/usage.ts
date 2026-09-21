@@ -19,7 +19,8 @@ Commands:
                                   Machine-oriented compatibility gate (CI)
   impact <contract> --to <ref>    Consumer-aware impact analysis: who is
                                   affected? (CI governance)
-  publish <file> [options]        Publish a contract to the local registry
+  publish <file> [options]        Publish a contract to a registry
+                                  (local directory or HTTP service)
   pull <package> <version>        Fetch a published contract
   versions <package>              List published versions of a package
   inspect <package> [version]     Show metadata and shape of a contract
@@ -169,50 +170,88 @@ Options:
 Exit 0 advisory by default; 1 with --strict on breaking changes or on
 registry/compile failures; 2 on usage errors.`,
 
-  publish: `bridge publish <file> [--registry dir] [--owner name]
+  publish: `bridge publish <file> [--registry dir|url] [--owner name]
                   [--description text] [--version vX]
+                  [--org org] [--project project] [--token token]
 
-Compile a contract and publish it to the local registry (immutable,
-content-addressed by the hash of its canonical IR).
+Compile a contract and publish it to a registry — immutable and
+content-addressed by the hash of its canonical IR.
 
-The registry root defaults to ./.bridge-registry, overridden by the
-BRIDGE_REGISTRY environment variable, then by --registry.
+Two registry kinds are supported:
+
+1. Filesystem registry (default): the registry root defaults to
+   ./.bridge-registry, overridden by the BRIDGE_REGISTRY environment
+   variable, then by --registry.
+
+2. HTTP registry service (a running bridge-registry-service): pass
+   --registry with an http:// or https:// URL. Tenancy coordinates are
+   required (--org, --project; or BRIDGE_ORG / BRIDGE_PROJECT) and the
+   request is authenticated with a bearer token (--token or BRIDGE_TOKEN).
+   The service records who published from the credential ('publishedBy'),
+   so --owner (a filesystem-registry concept) is rejected for HTTP
+   targets.
 
 Options:
-  --registry <dir>      registry root directory
-  --owner <name>        owning team or person
+  --registry <dir|url>  registry root directory or HTTP(S) service URL
+  --owner <name>        owning team or person (filesystem registries)
   --description <text>  searchable summary
   --version <vX>        explicit version for names without a version
                         segment (e.g. "payments" needs --version v1)
+  --org <org>           organization (HTTP registries; or BRIDGE_ORG)
+  --project <project>   project (HTTP registries; or BRIDGE_PROJECT)
+  --token <token>       bearer token (HTTP registries; or BRIDGE_TOKEN)
 
 Exit 1 when the version already exists with different content (versions
-are immutable — publish a new version instead).`,
+are immutable — publish a new version instead). Exit 2 on usage errors
+(missing token or coordinates for HTTP registries).`,
 
-  pull: `bridge pull <package> <version> [--registry dir] [--out file]
+  pull: `bridge pull <package> <version> [--registry dir|url] [--out file]
+              [--org org] [--project project] [--token token]
 
 Fetch a published contract version. Prints a summary of the stored
 metadata and package shape; with --out writes the canonical JSON of the
 package IR to a file instead.
 
-Options:
-  --registry <dir>      registry root directory
-  --out <file>          write canonical IR JSON to this file`,
+With an HTTP(S) --registry URL the fetch goes to a running registry
+service; tenancy coordinates (--org, --project) and a bearer token
+(--token or BRIDGE_TOKEN) are required.
 
-  versions: `bridge versions <package> [--registry dir]
+Options:
+  --registry <dir|url>  registry root directory or HTTP(S) service URL
+  --out <file>          write canonical IR JSON to this file
+  --org <org>           organization (HTTP registries; or BRIDGE_ORG)
+  --project <project>   project (HTTP registries; or BRIDGE_PROJECT)
+  --token <token>       bearer token (HTTP registries; or BRIDGE_TOKEN)`,
+
+  versions: `bridge versions <package> [--registry dir|url]
+              [--org org] [--project project] [--token token]
 
 List all published versions of a package, oldest to newest, marking the
-latest. Exit 1 when nothing is published under that name.`,
+latest. Exit 1 when nothing is published under that name.
 
-  inspect: `bridge inspect <package> [version] [--registry dir]
+With an HTTP(S) --registry URL the listing comes from a running registry
+service; tenancy coordinates (--org, --project) and a bearer token
+(--token or BRIDGE_TOKEN) are required.`,
 
-Show the metadata and shape of a published contract: hash, owner,
+  inspect: `bridge inspect <package> [version] [--registry dir|url]
+              [--org org] [--project project] [--token token]
+
+Show the metadata and shape of a published contract: hash, publisher,
 description, type/method/event counts and imports. Without a version the
-latest is inspected.`,
+latest is inspected.
 
-  search: `bridge search <query> [--registry dir]
+With an HTTP(S) --registry URL the metadata comes from a running registry
+service; tenancy coordinates (--org, --project) and a bearer token
+(--token or BRIDGE_TOKEN) are required.`,
+
+  search: `bridge search <query> [--registry dir|url] [--token token]
 
 Substring search (case-insensitive) over published package names,
-descriptions and owners. Empty results exit 0.`,
+descriptions and publishers. Empty results exit 0.
+
+With an HTTP(S) --registry URL the search runs on a registry service,
+scoped to the authenticated credential's organization (a bearer token is
+required via --token or BRIDGE_TOKEN).`,
 
   doctor: `bridge doctor [--registry dir]
 
