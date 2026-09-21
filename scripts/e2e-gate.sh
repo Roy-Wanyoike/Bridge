@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
 # scripts/e2e-gate.sh — 25-step end-to-end acceptance run against the built
 # workspace. Every step must PASS; the script exits non-zero otherwise.
+#
+# Self-contained by design: paths resolve from the repo root (no hardcoded
+# absolute paths), the release binary leg builds its own binary from
+# package.json when missing, and a missing bun toolchain yields SKIP — never
+# a misleading FAIL. With STRICT_SKIP=1 (CI contexts) skips fail the gate.
 set -u
 cd "$(dirname "$0")/.."
 
-B="node /home/z/my-project/packages/bridge-cli/dist/bin/bridge.js"
-TSC="/home/z/my-project/node_modules/.bin/tsc"
+B="node $PWD/packages/bridge-cli/dist/bin/bridge.js"
+TSC="$PWD/node_modules/.bin/tsc"
+VERSION="$(node -p "require('./package.json').version")"
+OS_LABEL="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH_LABEL="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+# bun's windows target emits a .exe suffix; the bash gate targets unix-likes
+# (Linux/macOS/WSL) but stays correct under MSYS where OSTYPE is msys*.
+case "${OSTYPE:-}" in msys*|cygwin*) OS_LABEL="windows"; EXT=".exe" ;; *) EXT="" ;; esac
+BIN="./dist/release/bridge-v${VERSION}-${OS_LABEL}-${ARCH_LABEL}${EXT}"
 TMP="$(mktemp -d /tmp/bridge-e2e-XXXX)"
 REG="$TMP/registry"
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 declare -a RESULTS
 
 step() {
@@ -31,7 +43,7 @@ step_expect_fail() {
 }
 
 # ---- 1-4: compiler front door -------------------------------------------
-step "01 version reports 0.2.1"        bash -c "$B version | grep -q 'bridge 0.2.1'"
+step "01 version reports $VERSION"     bash -c "$B version | grep -q 'bridge $VERSION'"
 step "02 doctor environment ok"        $B doctor
 step "03 init scaffolds project"        bash -c "cd $TMP && $B init demo && test -f demo/bridge.bridge"
 step "04 validate canonical example"   $B validate examples/payments/payments.bridge
@@ -52,13 +64,13 @@ step "12 generate rust"                $B generate --language rust examples/paym
 step "13 TS output typechecks (tsc strict)" "$TSC" -p "$TMP/gen-ts/tsconfig.json" --noEmit
 step "14 TS output compiles + runtime import" bash -c "$TSC -p $TMP/gen-ts/tsconfig.json && node -e \"const i=require('$TMP/gen-ts/dist/index.js'); if(Object.keys(i).length===0)process.exit(1)\""
 
-# ---- 17-20: compatibility engine ----------------------------------------
+# ---- 15-18: compatibility engine ----------------------------------------
 step "15 diff classifies v1→v2"        bash -c "$B diff examples/compatibility/v1.orders.bridge examples/compatibility/v2.orders.bridge | grep -Eq 'WARNING|SAFE|BREAKING'"
 step "16 check gate exits correctly"   $B check examples/compatibility/v1.orders.bridge examples/compatibility/v2.orders.bridge
 step "17 impact walks consumer graph"  bash -c "$B impact examples/compatibility/v1.orders.bridge --to examples/compatibility/v2.orders.bridge | grep -qi 'consumer\\|affected\\|no consumer'"
 step "18 check rejects breaking"       bash -c "printf 'typeBroken {{{' > $TMP/bad2.bridge; ! $B check $TMP/bad.bridge $TMP/bad2.bridge"
 
-# ---- 21-23: registry lifecycle ------------------------------------------
+# ---- 19-23: registry lifecycle ------------------------------------------
 step "19 publish to registry"          $B publish examples/payments/payments.bridge --registry "$REG"
 step "20 versions lists published"     bash -c "$B versions payments --registry $REG | grep -q v"
 step "21 inspect shows metadata"       bash -c "$B inspect payments --registry $REG | grep -qi payment"
@@ -66,11 +78,30 @@ step "22 pull fetches published"       bash -c "$B pull payments v1 --registry $
 step "23 search finds contract"        bash -c "$B search payments --registry $REG | grep -qi payment"
 
 # ---- 24-25: release binary ----------------------------------------------
-step "24 release binary runs"          ./dist/release/bridge-v0.2.1-linux-amd64 version
-step "25 release binary validates"     ./dist/release/bridge-v0.2.1-linux-amd64 validate examples/payments/payments.bridge
+# Self-contained: build the current-platform binary when it is missing; when
+# bun is unavailable, report SKIP honestly (verify-*.sh semantics, exit 77).
+if [ ! -x "$BIN" ]; then
+  if command -v bun >/dev/null 2>&1; then
+    bun scripts/package-release.mjs --current-only >/dev/null 2>&1 || true
+  fi
+fi
+if [ -x "$BIN" ]; then
+  step "24 release binary runs"        "$BIN" version
+  step "25 release binary validates"   "$BIN" validate examples/payments/payments.bridge
+elif command -v bun >/dev/null 2>&1; then
+  RESULTS+=("FAIL  24 release binary runs (bun present but packaging failed — run 'bun scripts/package-release.mjs --current-only' to see why)"); FAIL=$((FAIL+1))
+  RESULTS+=("FAIL  25 release binary validates"); FAIL=$((FAIL+1))
+else
+  RESULTS+=("SKIP  24 release binary runs (bun not installed — the release workflow covers this leg)"); SKIP=$((SKIP+1))
+  RESULTS+=("SKIP  25 release binary validates (bun not installed)"); SKIP=$((SKIP+1))
+fi
 
 echo "================ E2E GATE RESULTS ================"
 printf '%s\n' "${RESULTS[@]}"
 echo "=================================================="
-echo "PASS: $PASS  FAIL: $FAIL  (workdir: $TMP)"
+echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP  (workdir: $TMP)"
+if [ "${STRICT_SKIP:-0}" = "1" ] && [ "$SKIP" -gt 0 ]; then
+  echo "STRICT_SKIP=1: skipped steps fail the gate."
+  exit 1
+fi
 [ "$FAIL" -eq 0 ]
