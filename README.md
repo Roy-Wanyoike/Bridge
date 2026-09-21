@@ -104,7 +104,7 @@ see [docs/FFI.md](docs/FFI.md).
 
 ## Status
 
-**Bridge 0.2.0 — the roadmap through Phase 3 is shipped and tested: 669 tests green across nine packages (CLI 98, compat 101, core 154, FFI 10, generators 18, LSP 33, registry 65, registry-service 78, serialization 112), every generated language compile-verified, and the Go↔Rust FFI proven end to end on real builds.** See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
+**Bridge 0.2.1 — the roadmap through Phase 3 is shipped and tested: 699 tests green across nine packages (CLI 113, compat 101, core 154, FFI 11, generators 32, LSP 33, registry 65, registry-service 78, serialization 112), every generated language compile-verified, the Go↔Rust FFI proven end to end on real builds, and the CLI publishes to the registry service over HTTP.** See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
 
 | Area | Status |
 |------|--------|
@@ -212,7 +212,7 @@ npm run build
 npm test
 ```
 
-Requires Node.js >= 22. The test suite covers all nine packages (669 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets.
+Requires Node.js >= 22. The test suite covers all nine packages (699 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets.
 
 ## Contributing
 
