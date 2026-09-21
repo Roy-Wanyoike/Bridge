@@ -64,6 +64,48 @@ export function registryBaseUrl(): string | null {
   return process.env.NEXT_PUBLIC_REGISTRY_URL ?? 'http://localhost:4350';
 }
 
+/**
+ * Parses `REGISTRY_ORGS` — the live-mode discovery source.
+ *
+ * The registry service intentionally exposes **no cross-tenant discovery
+ * route** (another org's resources are indistinguishable from unknown ones —
+ * 404, never leaked), and every credential is bound to exactly one org. So
+ * the deployment declares what it serves:
+ *
+ *     REGISTRY_ORGS="acme:payments,acme:commerce"
+ *
+ * `org:project` pairs separated by commas, semicolons or whitespace.
+ * Duplicate pairs collapse; order is preserved. Every org must declare at
+ * least one project — a bare org name is a configuration error, not an
+ * empty page. Returns `null` when the variable is unset/blank.
+ */
+export function parseOrgsConfig(raw: string | undefined | null): OrgInfo[] | null {
+  if (raw === undefined || raw === null || raw.trim() === '') return null;
+  const byOrg = new Map<string, string[]>();
+  const seen = new Set<string>();
+  for (const piece of raw.split(/[,;\s]+/)) {
+    if (piece === '') continue;
+    const sep = piece.indexOf(':');
+    const org = sep === -1 ? piece : piece.slice(0, sep);
+    const project = sep === -1 ? '' : piece.slice(sep + 1);
+    if (org === '' || project === '') {
+      throw new Error(
+        `RegistryMisconfigured: REGISTRY_ORGS entry '${piece}' is not an org:project pair — ` +
+          `declare every project explicitly, e.g. REGISTRY_ORGS="acme:payments,acme:commerce". ` +
+          `A bare org name would otherwise render as a silently empty page.`,
+      );
+    }
+    const key = `${org}:${project}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const projects = byOrg.get(org) ?? [];
+    projects.push(project);
+    byOrg.set(org, projects);
+  }
+  if (byOrg.size === 0) return null;
+  return Array.from(byOrg.entries(), ([org, projects]) => ({ org, projects }));
+}
+
 /* ------------------------------------------------------------------ */
 /* REST client against the registry service                            */
 /* ------------------------------------------------------------------ */
@@ -146,14 +188,58 @@ async function mapBounded<T, R>(
   return results;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Live projections: the service serves raw ContractMeta + per-route    */
+/* closures; the UI needs richer summaries. Everything below derives    */
+/* what the service genuinely exposes and leaves what it does not       */
+/* honestly empty — never fabricated.                                   */
+/* ------------------------------------------------------------------ */
+
+/** Shape returned by the service's list/pull routes (storage-level meta). */
+interface ServiceContractMeta {
+  org: string;
+  project: string;
+  packageName: string;
+  base: string;
+  version: string;
+  hash: string;
+  shortHash: string;
+  imports: string[];
+  publishedAt: string;
+  description?: string;
+  repository?: string;
+  publishedBy?: string;
+}
+
+function isServiceContractMeta(v: unknown): v is ServiceContractMeta {
+  return (
+    typeof v === 'object' && v !== null &&
+    typeof (v as ServiceContractMeta).packageName === 'string' &&
+    typeof (v as ServiceContractMeta).version === 'string' &&
+    typeof (v as ServiceContractMeta).hash === 'string'
+  );
+}
+
 export class RestRegistryClient implements RegistryClient {
-  constructor(private readonly baseUrl: string) {}
+  constructor(
+    private readonly baseUrl: string,
+    private readonly token?: string,
+  ) {}
 
   private async get<T>(path: string): Promise<T> {
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
-        headers: { accept: 'application/json' },
+        headers: {
+          accept: 'application/json',
+          // The registry service fails closed: every /v1 read requires a
+          // bearer token. The credential is server-side (REGISTRY_TOKEN) —
+          // it must never reach the browser bundle.
+          ...(this.token !== undefined && this.token !== ''
+            ? { authorization: `Bearer ${this.token}` }
+            : {}),
+        },
         cache: 'no-store',
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
@@ -175,16 +261,111 @@ export class RestRegistryClient implements RegistryClient {
     return (await res.json()) as T;
   }
 
+  /**
+   * Org discovery comes from the deployment's `REGISTRY_ORGS` config — the
+   * service has no `GET /v1/orgs` route by design (tenancy: cross-org
+   * existence is never leaked), so the operator declares the org/project
+   * surface the dashboard serves.
+   */
   async listOrgs(): Promise<OrgInfo[]> {
-    const path = '/v1/orgs';
-    const body = await this.get<Record<string, unknown>>(path);
-    return pickArray(body, ['orgs'], path) as OrgInfo[];
+    const orgs = parseOrgsConfig(process.env['REGISTRY_ORGS']);
+    if (orgs === null) {
+      throw new RegistryError(
+        'RegistryMisconfigured: live mode needs REGISTRY_ORGS (e.g. "acme:payments,acme:commerce") — ' +
+          'the registry service exposes no cross-tenant discovery route, so the deployment must ' +
+          'declare the org/project surface it serves',
+        { status: 0, path: '/v1/orgs (discovery)' },
+      );
+    }
+    return orgs;
   }
 
   async listContracts(org: string, project: string): Promise<ContractSummary[]> {
     const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts`;
     const body = await this.get<Record<string, unknown>>(path);
-    return pickArray(body, ['contracts'], path) as ContractSummary[];
+    const metas = pickArray(body, ['contracts'], path).filter(isServiceContractMeta);
+    // Derive the summary fields the service does not serve on the list
+    // route (version count, direct dependents, latest verdict) with bounded
+    // concurrency — the same discipline as the overview fan-out.
+    return mapBounded(metas, 8, (m) => this.summarize(org, project, m));
+  }
+
+  /** One contract's latest version, fully projected. */
+  private async latestSummary(org: string, project: string, base: string): Promise<ContractSummary | undefined> {
+    const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}`;
+    let body: Record<string, unknown>;
+    try {
+      body = await this.get<Record<string, unknown>>(path);
+    } catch (err) {
+      if (isNotFound(err)) return undefined;
+      throw err;
+    }
+    const meta = body['meta'];
+    if (!isServiceContractMeta(meta)) {
+      throw new RegistryError(
+        `RegistryUnreachable: registry response for GET ${path} has an unexpected shape — API schema drift`,
+        { status: 0, path },
+      );
+    }
+    return this.summarize(org, project, meta);
+  }
+
+  /**
+   * Project storage meta into the UI summary: derive versionCount,
+   * direct-dependent count and the latest adjacent-version verdict from the
+   * routes that genuinely serve them; leave `languages` empty (the service
+   * does not record generated languages — no fabrication).
+   */
+  private async summarize(org: string, project: string, meta: ServiceContractMeta): Promise<ContractSummary> {
+    let versionCount = 1;
+    let latestVerdict: ContractSummary['latestVerdict'];
+    const versionsPath = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(meta.base)}/versions`;
+    try {
+      const versions = pickArray(
+        await this.get<Record<string, unknown>>(versionsPath),
+        ['versions'],
+        versionsPath,
+      ).map(String);
+      versionCount = versions.length;
+      if (versions.length >= 2) {
+        const target = versions[versions.length - 1]!;
+        const previous = versions[versions.length - 2]!;
+        const diff = await this.getDiff(org, project, meta.base, previous, target);
+        latestVerdict = diff?.verdict;
+      }
+    } catch (err) {
+      if (!isNotFound(err)) throw err;
+    }
+    let consumers = 0;
+    const consumersPath = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(meta.base)}/versions/${enc(meta.version)}/consumers`;
+    try {
+      const refs = pickArray(
+        await this.get<Record<string, unknown>>(consumersPath),
+        ['consumers'],
+        consumersPath,
+      );
+      consumers = refs.length;
+    } catch (err) {
+      if (!isNotFound(err)) throw err;
+    }
+    return {
+      org,
+      project,
+      base: meta.base,
+      packageName: meta.packageName,
+      latestVersion: meta.version,
+      latestHash: meta.hash,
+      latestShortHash: meta.shortHash,
+      owner: meta.publishedBy ?? '',
+      description: meta.description,
+      repository: meta.repository,
+      versionCount,
+      firstPublishedAt: meta.publishedAt,
+      updatedAt: meta.publishedAt,
+      consumers,
+      languages: [],
+      latestVerdict,
+    };
   }
 
   async listAllContracts(org?: string): Promise<ContractSummary[]> {
@@ -211,19 +392,18 @@ export class RestRegistryClient implements RegistryClient {
   }
 
   async getContract(org: string, project: string, base: string): Promise<ContractSummary | null> {
-    const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}`;
-    try {
-      return await this.get<ContractSummary>(path);
-    } catch (err) {
-      if (isNotFound(err)) return null;
-      throw err;
-    }
+    const latest = await this.latestSummary(org, project, base);
+    return latest ?? null;
   }
 
   async listVersions(org: string, project: string, base: string): Promise<VersionMeta[]> {
     const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}/versions`;
     const body = await this.get<Record<string, unknown>>(path);
-    return pickArray(body, ['versions'], path) as VersionMeta[];
+    const versions = pickArray(body, ['versions'], path);
+    // The service's versions route returns version strings; the per-version
+    // metadata lives on the pull routes. getVersion()/latestSummary() enrich
+    // where the UI needs it.
+    return versions.map((v) => ({ version: String(v) })) as VersionMeta[];
   }
 
   async getVersion(
@@ -234,7 +414,35 @@ export class RestRegistryClient implements RegistryClient {
   ): Promise<VersionDetail | null> {
     const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}/versions/${enc(version)}`;
     try {
-      return await this.get<VersionDetail>(path);
+      const body = await this.get<Record<string, unknown>>(path);
+      const meta = body['meta'];
+      const ir = body['ir'] as { imports?: string[]; types?: unknown[]; services?: unknown[]; events?: unknown[] } | undefined;
+      if (!isServiceContractMeta(meta) || typeof ir !== 'object' || ir === null) {
+        throw new RegistryError(
+          `RegistryUnreachable: registry response for GET ${path} has an unexpected shape — API schema drift`,
+          { status: 0, path },
+        );
+      }
+      return {
+        packageName: meta.packageName,
+        base: meta.base,
+        version: meta.version,
+        hash: meta.hash,
+        shortHash: meta.shortHash,
+        imports: meta.imports,
+        publishedAt: meta.publishedAt,
+        publisher: meta.publishedBy ?? '',
+        owner: '',
+        repository: meta.repository,
+        languages: [],
+        schema: {
+          types: Array.isArray(ir.types) ? (ir.types as { name?: unknown }[]).map((t) => String(t?.name ?? '')) : [],
+          enums: [],
+          services: Array.isArray(ir.services) ? (ir.services as { name?: unknown }[]).map((s) => String(s?.name ?? '')) : [],
+          events: Array.isArray(ir.events) ? (ir.events as { name?: unknown }[]).map((e) => String(e?.name ?? '')) : [],
+          aliases: [],
+        },
+      };
     } catch (err) {
       if (isNotFound(err)) return null;
       throw err;
@@ -249,7 +457,20 @@ export class RestRegistryClient implements RegistryClient {
   ): Promise<ConsumerRef[]> {
     const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}/versions/${enc(version)}/consumers`;
     const body = await this.get<Record<string, unknown>>(path);
-    return pickArray(body, ['consumers'], path) as ConsumerRef[];
+    const consumers = pickArray(body, ['consumers'], path);
+    // The service returns the dependents as ContractMeta[] — direct
+    // dependents only (BFS depth 1). Project them into ConsumerRefs.
+    return consumers.map((c) => {
+      const m = c as ServiceContractMeta;
+      return {
+        packageName: m.packageName,
+        base: m.base,
+        org: m.org,
+        project: m.project,
+        version: m.version,
+        depth: 1,
+      } as ConsumerRef;
+    });
   }
 
   async getDiff(
@@ -261,21 +482,64 @@ export class RestRegistryClient implements RegistryClient {
   ): Promise<DiffReport | null> {
     const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}/versions/${enc(to)}/diff?from=${encodeURIComponent(from)}`;
     try {
-      return await this.get<DiffReport>(path);
+      const body = await this.get<Record<string, unknown>>(path);
+      // The service computes the report from the two stored IRs; its
+      // response leaves the route coordinates implicit.
+      return {
+        org,
+        project,
+        contract: typeof body['contract'] === 'string' ? body['contract'] : base,
+        packageName: `${base}.${to}`,
+        from: typeof body['from'] === 'string' ? body['from'] : from,
+        to: typeof body['to'] === 'string' ? body['to'] : to,
+        verdict: body['verdict'] as DiffReport['verdict'],
+        summary: body['summary'] as DiffReport['summary'],
+        changes: (body['changes'] ?? []) as DiffReport['changes'],
+        impact: body['impact'] as DiffReport['impact'],
+      };
     } catch (err) {
       if (isNotFound(err)) return null;
       throw err;
     }
   }
 
+  /**
+   * The service has no global graph route (its per-contract graph is the
+   * import closure of one contract). The console's dependency graph is
+   * composed client-side: every published contract is a node; each
+   * dependent reported by the service becomes a directed edge
+   * consumer → provider.
+   */
   async getGraph(org?: string): Promise<GraphData> {
-    const qs = org ? `?org=${encodeURIComponent(org)}` : '';
-    const path = `/v1/graph${qs}`;
-    const body = await this.get<Record<string, unknown>>(path);
-    return {
-      nodes: pickArray(body, ['nodes'], path) as GraphData['nodes'],
-      edges: pickArray(body, ['edges'], path) as GraphData['edges'],
-    };
+    const contracts = await this.listAllContracts(org);
+    const nodes: GraphData['nodes'] = contracts.map((c) => ({
+      id: `${c.org}/${c.project}/${c.base}`,
+      org: c.org,
+      project: c.project,
+      base: c.base,
+      version: c.latestVersion,
+      consumers: c.consumers,
+      verdict: c.latestVerdict,
+    }));
+    const consumerLists = await mapBounded(contracts, 8, async (c) => {
+      try {
+        return await this.listConsumers(c.org, c.project, c.base, c.latestVersion);
+      } catch (err) {
+        if (isNotFound(err)) return [] as ConsumerRef[];
+        throw err;
+      }
+    });
+    const edges: GraphData['edges'] = [];
+    for (let i = 0; i < contracts.length; i++) {
+      const provider = contracts[i]!;
+      for (const ref of consumerLists[i] ?? []) {
+        edges.push({
+          from: `${ref.org}/${ref.project}/${ref.base}`,
+          to: `${provider.org}/${provider.project}/${provider.base}`,
+        });
+      }
+    }
+    return { nodes, edges };
   }
 
   async listAudit(filters?: AuditFilters): Promise<AuditEntry[]> {
@@ -287,7 +551,22 @@ export class RestRegistryClient implements RegistryClient {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     const path = `/v1/audit${suffix}`;
     const body = await this.get<Record<string, unknown>>(path);
-    return pickArray(body, ['entries', 'audit'], path) as AuditEntry[];
+    const rows = pickArray(body, ['entries', 'audit'], path) as Record<string, unknown>[];
+    // The service's audit rows carry time/status/ok; the UI's AuditEntry
+    // renders at/actor/detail. Nulls (pre-auth rows) become honest
+    // placeholders, never fabricated data.
+    return rows.map((r, i) => ({
+      id: r['id'] !== undefined ? String(r['id']) : `${i}`,
+      at: String(r['time'] ?? ''),
+      actor: typeof r['actor'] === 'string' && r['actor'] !== '' ? r['actor'] : 'unknown',
+      action: String(r['action'] ?? 'unknown'),
+      org: typeof r['org'] === 'string' ? r['org'] : '',
+      project: typeof r['project'] === 'string' ? r['project'] : '',
+      contract: typeof r['contract'] === 'string' ? r['contract'] : '',
+      version: typeof r['version'] === 'string' ? r['version'] : undefined,
+      detail: `status ${String(r['status'] ?? '?')}${r['ok'] === false ? ' (failed)' : ''}`,
+      verdict: undefined,
+    })) as AuditEntry[];
   }
 
   async getOverview(): Promise<OverviewData> {
@@ -441,7 +720,18 @@ export function getRegistryClient(): RegistryClient {
           'RegistryMisconfigured: live mode is enabled but NEXT_PUBLIC_REGISTRY_URL is not set. Point it at the registry service (e.g. http://localhost:4350), or set NEXT_PUBLIC_DEMO_MODE=true for the zero-backend demo.',
         );
       }
-      cached = new RestRegistryClient(raw);
+      const token = process.env.REGISTRY_TOKEN;
+      if (token === undefined || token === '') {
+        throw new Error(
+          'RegistryMisconfigured: live mode is enabled but REGISTRY_TOKEN is not set. The registry service fails closed — every /v1 read requires a bearer token. Set REGISTRY_TOKEN (server-side only; use an admin-role credential so the audit page can read /v1/audit), or set NEXT_PUBLIC_DEMO_MODE=true for the zero-backend demo.',
+        );
+      }
+      if (parseOrgsConfig(process.env['REGISTRY_ORGS']) === null) {
+        throw new Error(
+          'RegistryMisconfigured: live mode is enabled but REGISTRY_ORGS is not set. The registry service exposes no cross-tenant discovery route, so declare the org/project surface the dashboard serves, e.g. REGISTRY_ORGS="acme:payments,acme:commerce". Or set NEXT_PUBLIC_DEMO_MODE=true for the zero-backend demo.',
+        );
+      }
+      cached = new RestRegistryClient(raw, token);
     }
   }
   return cached;

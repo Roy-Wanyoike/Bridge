@@ -166,7 +166,7 @@ export function AppShell({
           </div>
           <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
             {demoMode
-              ? 'Serving a deterministic seed dataset. Set NEXT_PUBLIC_DEMO_MODE=false and NEXT_PUBLIC_REGISTRY_URL to connect.'
+              ? 'Serving a deterministic seed dataset. Set NEXT_PUBLIC_DEMO_MODE=false plus NEXT_PUBLIC_REGISTRY_URL, REGISTRY_TOKEN and REGISTRY_ORGS to connect.'
               : 'Connected to the registry service.'}
           </p>
         </div>
