@@ -346,6 +346,52 @@ export interface RemoteContractMeta {
   languages?: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Response shape validation (issue #119)
+// ---------------------------------------------------------------------------
+
+/** The meta fields every command dereferences; each must be a string. */
+const META_STRING_FIELDS = ['org', 'project', 'packageName', 'version', 'hash', 'shortHash'] as const;
+
+/**
+ * Which required `RemoteContractMeta` field is malformed, if any.
+ *
+ * Commands dereference remote payloads directly (publish prints
+ * `remote.imports`, pull prints `ir.types`/`ir.services`), so a truncated or
+ * hostile response must surface as a plain CliError — never as a TypeError
+ * with a stack trace deep inside the command.
+ */
+function describeMetaProblem(meta: unknown): string | undefined {
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+    return 'meta is not an object';
+  }
+  const record = meta as Record<string, unknown>;
+  for (const field of META_STRING_FIELDS) {
+    if (typeof record[field] !== 'string') return `meta.${field} must be a string`;
+  }
+  if (!Array.isArray(record['imports']) || !record['imports'].every((v) => typeof v === 'string')) {
+    return 'meta.imports must be a list of strings';
+  }
+  return undefined;
+}
+
+/**
+ * Which required `IRPackage` field is malformed, if any — minimal check on
+ * the fields `pull`/`inspect` actually walk (name, imports, types, services,
+ * events).
+ */
+function describeIrProblem(ir: unknown): string | undefined {
+  if (ir === null || typeof ir !== 'object' || Array.isArray(ir)) {
+    return 'ir is not an object';
+  }
+  const record = ir as Record<string, unknown>;
+  if (typeof record['name'] !== 'string') return 'ir.name must be a string';
+  for (const field of ['imports', 'types', 'services', 'events'] as const) {
+    if (!Array.isArray(record[field])) return `ir.${field} must be a list`;
+  }
+  return undefined;
+}
+
 /** `bridge publish` over HTTP. */
 export async function httpPublish(
   target: Extract<RegistryTarget, { kind: 'http' }>,
@@ -375,8 +421,12 @@ export async function httpPublish(
     target, 'POST', `${coords}/contracts/${encodeURIComponent(packageName)}`, body, headers,
   );
   assertOk(response, `publishing ${packageName}`);
-  if (response.body === null || typeof response.body !== 'object' || typeof response.body['meta'] !== 'object') {
+  if (response.body === null || typeof response.body !== 'object' || response.body['meta'] === undefined) {
     throw new CliError(`registry: publish response for ${packageName} had an unexpected shape`);
+  }
+  const metaProblem = describeMetaProblem(response.body['meta']);
+  if (metaProblem !== undefined) {
+    throw new CliError(`registry: publish response for ${packageName} had an unexpected shape: ${metaProblem}`);
   }
   return response.body;
 }
@@ -392,7 +442,7 @@ export async function httpVersions(
   const response = await request(target, 'GET', `${coords}/contracts/${encodeURIComponent(packageName)}/versions`);
   assertOk(response, `listing versions of ${packageName}`);
   const versions = response.body?.['versions'];
-  if (!Array.isArray(versions)) {
+  if (!Array.isArray(versions) || !versions.every((v) => typeof v === 'string')) {
     throw new CliError(`registry: versions response for ${packageName} had an unexpected shape`);
   }
   return versions;
@@ -414,6 +464,14 @@ export async function httpPull(
   if (response.body === null || typeof response.body !== 'object' || response.body['ir'] === undefined || response.body['meta'] === undefined) {
     throw new CliError(`registry: pull response for ${packageName} had an unexpected shape`);
   }
+  const irProblem = describeIrProblem(response.body['ir']);
+  if (irProblem !== undefined) {
+    throw new CliError(`registry: pull response for ${packageName} had an unexpected shape: ${irProblem}`);
+  }
+  const metaProblem = describeMetaProblem(response.body['meta']);
+  if (metaProblem !== undefined) {
+    throw new CliError(`registry: pull response for ${packageName} had an unexpected shape: ${metaProblem}`);
+  }
   return response.body;
 }
 
@@ -427,6 +485,12 @@ export async function httpSearch(
   const results = response.body?.['results'];
   if (!Array.isArray(results)) {
     throw new CliError(`registry: search response for '${query}' had an unexpected shape`);
+  }
+  for (const meta of results) {
+    const metaProblem = describeMetaProblem(meta);
+    if (metaProblem !== undefined) {
+      throw new CliError(`registry: search response for '${query}' had an unexpected shape: ${metaProblem}`);
+    }
   }
   return results;
 }

@@ -8,14 +8,17 @@
  *
  * `exit` semantics: on the `exit` notification the connection stops and the
  * exit handler runs with the LSP-mandated code (0 after `shutdown`, 1
- * otherwise). The default handler sets `process.exitCode` and destroys the
+ * otherwise). Unrecoverable read errors — framing corruption past the header
+ * cap and declared bodies above MAX_BODY_BYTES — answer with a JSON-RPC error
+ * envelope, log to stderr, and run the exit handler with code 1. The default
+ * handler sets `process.exitCode` and destroys the
  * readable so a stdio host terminates cleanly without truncating buffered
  * stdout — hosts (and tests) can pass their own handler.
  */
 
 import type { Readable } from 'node:stream';
 import { MessageReader, ErrorCodes, isRequest, writeMessage, type JsonRpcMessage } from './jsonrpc';
-import { BridgeLspServer, type ServerOptions } from './server';
+import { BridgeLspServer, SERVER_NAME, type ServerOptions } from './server';
 
 export interface ConnectionOptions {
   /** Invoked on the `exit` notification (default: exitCode + destroy readable). */
@@ -70,7 +73,20 @@ export function createConnection(
       });
       return;
     }
-    stop(); // corrupt framing cannot be recovered — stop reading
+    // 'framing' (unrecoverable framing corruption) and 'limit' (declared
+    // Content-Length above MAX_BODY_BYTES) both desynchronize the stream, so
+    // neither can be answered with a normal in-band recovery: report the
+    // failure, stop reading, and exit nonzero. Never buffered silently.
+    const code = kind === 'limit' ? ErrorCodes.InvalidRequest : ErrorCodes.ParseError;
+    const label = kind === 'limit' ? 'Message limit' : 'Framing error';
+    writeMessage(writable, {
+      jsonrpc: '2.0',
+      id: null,
+      error: { code, message: `${label}: ${String(cause)}` },
+    });
+    process.stderr.write(`${SERVER_NAME}: ${label.toLowerCase()}: ${String(cause)} — stopping.\n`);
+    stop(); // corrupt framing / rejected body cannot be recovered — stop reading
+    serverOptions.exit?.(1);
   });
 
   function dispatch(message: JsonRpcMessage): void {
