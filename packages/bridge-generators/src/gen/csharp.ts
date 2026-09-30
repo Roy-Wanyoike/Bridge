@@ -25,8 +25,9 @@
  * - `bytes` maps to byte[]; System.Text.Json serializes byte[] as a
  *   base64 string, which is exactly the Bridge wire encoding.
  * - `set<T>` maps to HashSet<T>; the wire format is ALWAYS a JSON array
- *   and ToDict sorts elements with StringComparer.Ordinal (UTF-16 code
- *   units — matching TypeScript) for deterministic wire output.
+ *   and ToDict sorts elements into the canonical Bridge set order (numbers
+ *   numerically, strings by Unicode code point via UTF-8 bytes, enums by
+ *   wire name, false < true — identical in all six targets, #117).
  * - Type aliases have no C# declaration: the underlying type is
  *   substituted everywhere (see mappings.ts aliasTargets).
  * - Cross-package references become opaque JsonElement passthrough
@@ -177,16 +178,54 @@ function serializeExpr(ref: TypeRef, value: string, input: GeneratorInput): stri
     }
     case 'list':
       return `new List<object>(${value}.Select(item => (object)${serializeExpr(ref.element, 'item', input)}).ToList())`;
-    case 'set':
-      // Deterministic wire output: ordinal sort of the STRING projection
-      // (UTF-16 code units). Projecting via x?.ToString() keeps non-string
-      // sets (set<int32>, ...) compilable — StringComparer is not an
-      // IComparer<T> for non-string element types.
+    case 'set': {
+      // Canonical Bridge set order (#117), identical in every target
+      // language: numeric/bool elements in natural order (ascending /
+      // false<true), strings and enum wire names by Unicode code point
+      // (UTF-8 byte order — StringComparer.Ordinal compares UTF-16 code
+      // units, which reorders supplementary characters). Remaining element
+      // kinds keep the compilable string-projection fallback.
+      const elementSort = setElementSortClass(ref.element, input);
+      if (elementSort === 'numeric' || elementSort === 'bool') {
+        return `new List<object>(${value}.OrderBy(x => x).Select(item => (object)${serializeExpr(ref.element, 'item', input)}).ToList())`;
+      }
+      if (elementSort === 'string') {
+        return `new List<object>(${value}.OrderBy(x => x, BridgeJson.Utf8Comparer).Select(item => (object)${serializeExpr(ref.element, 'item', input)}).ToList())`;
+      }
+      if (elementSort === 'enum') {
+        return `new List<object>(${value}.OrderBy(x => x.Value, BridgeJson.Utf8Comparer).Select(item => (object)${serializeExpr(ref.element, 'item', input)}).ToList())`;
+      }
       return `new List<object>(${value}.OrderBy(x => x?.ToString(), StringComparer.Ordinal).Select(item => (object)${serializeExpr(ref.element, 'item', input)}).ToList())`;
+    }
     case 'map':
       return `new Dictionary<string, object>(${value}.ToDictionary(kv => kv.Key, kv => (object)${serializeExpr(ref.value, 'kv.Value', input)}))`;
     case 'optional':
       return serializeExpr(ref.inner, value, input);
+  }
+}
+
+/**
+ * Sort class of a set element for the canonical Bridge set order (#117).
+ * Mirrors the Java setElementSort: numbers/bools natural, string-likes and
+ * enums code-point ordered, everything else on the projection fallback.
+ */
+function setElementSortClass(ref: TypeRef, input: GeneratorInput): 'numeric' | 'bool' | 'string' | 'enum' | 'other' {
+  switch (ref.kind) {
+    case 'primitive':
+      if (NUMERIC_PRIMITIVES.has(ref.primitive)) return 'numeric';
+      if (ref.primitive === 'bool') return 'bool';
+      if (STRING_LIKE_PRIMITIVES.has(ref.primitive)) return 'string';
+      return 'other';
+    case 'named': {
+      // Aliases are substituted in C#, so resolve to the underlying type.
+      const aliasTarget = input.render.aliasTargets?.get(ref.name);
+      if (aliasTarget !== undefined) return setElementSortClass(aliasTarget, input);
+      const local = input.ir.types.find((t) => t.name === ref.name);
+      if (local !== undefined && local.kind === 'enum') return 'enum';
+      return 'other';
+    }
+    default:
+      return 'other';
   }
 }
 
@@ -454,6 +493,22 @@ function jsonHelpersBlock(): string {
   lines.push('            throw new ArgumentException(ctx + ": expected number");');
   lines.push('        }');
   lines.push('        return el.GetDouble();');
+  lines.push('    }');
+  lines.push('');
+  lines.push('    /// <summary>Canonical string order for set elements (#117): compares');
+  lines.push('    /// by UTF-8 bytes, i.e. Unicode code points — NOT StringComparer.Ordinal,');
+  lines.push('    /// which is UTF-16 code-unit order and reorders supplementary (non-BMP)');
+  lines.push('    /// characters.</summary>');
+  lines.push('    public static readonly Comparer<string> Utf8Comparer = Comparer<string>.Create(CompareUtf8);');
+  lines.push('');
+  lines.push('    private static int CompareUtf8(string a, string b) {');
+  lines.push('        byte[] ba = System.Text.Encoding.UTF8.GetBytes(a);');
+  lines.push('        byte[] bb = System.Text.Encoding.UTF8.GetBytes(b);');
+  lines.push('        int n = Math.Min(ba.Length, bb.Length);');
+  lines.push('        for (int i = 0; i < n; i++) {');
+  lines.push('            if (ba[i] != bb[i]) { return ba[i].CompareTo(bb[i]); }');
+  lines.push('        }');
+  lines.push('        return ba.Length.CompareTo(bb.Length);');
   lines.push('    }');
   lines.push('');
   lines.push('    /// <summary>Structural equality for wire values: dictionaries by');

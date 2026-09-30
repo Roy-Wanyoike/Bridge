@@ -197,3 +197,114 @@ test('wasm: module declarations gated on file presence (enum-less package)', () 
     assert.match(lib.content, /pub mod types;/);
   }
 });
+
+test('wasm: index.d.ts derives complete, correctly-typed declarations from the IR (#117)', () => {
+  // Regression fixture for issue #117. The previous implementation derived
+  // index.d.ts by regex-parsing its own generated Rust, which (a) silently
+  // dropped the keyword-named field `type` (Rust raw identifier r#type did
+  // not match `pub (\w+):`), (b) rendered set/map/named fields as
+  // `unknown`, and (c) misrouted named types starting with i/u/f to number.
+  const probe: IRPackage = {
+    name: 'wasmprobe.v1',
+    imports: ['loyalty.v1'],
+    types: [
+      {
+        name: 'Mode',
+        kind: 'enum',
+        variants: [{ name: 'ON' }, { name: 'OFF' }],
+      },
+      {
+        name: 'Inner',
+        kind: 'struct',
+        fields: [
+          { name: 'label', type: { kind: 'primitive', primitive: 'string' }, optional: false, constraints: [] },
+        ],
+      },
+      {
+        name: 'Choice',
+        kind: 'union',
+        variants: [
+          { name: 'A', type: { kind: 'primitive', primitive: 'string' }, optional: false, constraints: [] },
+          { name: 'B', type: { kind: 'primitive', primitive: 'bool' }, optional: false, constraints: [] },
+        ],
+      },
+      {
+        name: 'Probe',
+        kind: 'struct',
+        fields: [
+          { name: 'type', type: { kind: 'primitive', primitive: 'string' }, optional: false, constraints: [] },
+          {
+            name: 'flags',
+            type: { kind: 'set', element: { kind: 'primitive', primitive: 'string' } },
+            optional: false,
+            constraints: [],
+          },
+          { name: 'count', type: { kind: 'primitive', primitive: 'int32' }, optional: true, constraints: [] },
+          {
+            name: 'mapping',
+            type: {
+              kind: 'map',
+              key: { kind: 'primitive', primitive: 'string' },
+              value: { kind: 'primitive', primitive: 'int64' },
+            },
+            optional: false,
+            constraints: [],
+          },
+          { name: 'big', type: { kind: 'primitive', primitive: 'int64' }, optional: false, constraints: [] },
+          { name: 'mode', type: { kind: 'named', name: 'Mode' }, optional: false, constraints: [] },
+          { name: 'inner', type: { kind: 'named', name: 'Inner' }, optional: false, constraints: [] },
+          { name: 'pick', type: { kind: 'named', name: 'Choice' }, optional: false, constraints: [] },
+          {
+            name: 'external',
+            type: { kind: 'named', name: 'LoyaltyProfile', package: 'loyalty.v1' },
+            optional: true,
+            constraints: [],
+          },
+        ],
+      },
+    ],
+    services: [],
+    events: [],
+  };
+
+  const files = generateFfi(probe, { target: 'wasm' });
+  const dts = byPath(files, 'index.d.ts').content;
+
+  const expected: ReadonlyArray<readonly [string, string]> = [
+    ['type', 'string'],
+    ['flags', 'readonly string[]'],
+    ['count', 'number | null'],
+    ['mapping', 'Record<string, number>'],
+    ['big', 'number'],
+    ['mode', '"ON" | "OFF"'],
+    ['inner', 'InnerWasm'],
+    ['pick', 'unknown'],
+    ['external', 'unknown | null'],
+  ];
+
+  // Coverage assertion: parse the emitted ProbeWasm members and require
+  // EVERY IR field to be present exactly once with the expected TS type.
+  const classBlock = /export declare class ProbeWasm \{([\s\S]*?)\n\}/.exec(dts);
+  const classBody = classBlock?.[1];
+  if (classBody === undefined) {
+    assert.fail('ProbeWasm declaration missing from index.d.ts');
+  }
+  const members = new Map<string, string>();
+  for (const match of classBody.matchAll(/readonly (\w+): (.+);/g)) {
+    members.set(match[1]!, match[2]!);
+  }
+  for (const [name, type] of expected) {
+    assert.equal(members.get(name), type, `ProbeWasm.${name} must be declared as ${type}`);
+  }
+  assert.equal(members.size, expected.length, 'every IR field must appear in ProbeWasm');
+  // The historical regression: the r#type field was silently dropped.
+  assert.ok(members.has('type'), 'keyword-named field `type` must not be dropped');
+
+  // Nested struct gets its own complete wrapper class.
+  assert.match(dts, /export declare class InnerWasm \{/);
+  assert.match(dts, /readonly label: string;/);
+  // The lib.rs wasm surface wraps every struct (Probe and Inner).
+  const lib = byPath(files, 'src/lib.rs').content;
+  assert.match(lib, /bridge_wasm_type!\(Probe\);/);
+  assert.match(lib, /bridge_wasm_type!\(Inner\);/);
+});

@@ -18,7 +18,9 @@
  * - `bytes` maps to `bytes`; on the JSON wire it is a base64 string.
  *   to_dict/from_dict convert with the stdlib base64 module.
  * - `set<T>` maps to `set[T]`; the wire format is ALWAYS a JSON array and
- *   to_dict sorts elements for deterministic wire output.
+ *   to_dict sorts elements into the canonical Bridge set order (numbers
+ *   numerically, strings by code point, False < True — identical in all
+ *   six targets, #117).
  * - Enums map to `class Name(str, Enum)` with the declared SCREAMING_SNAKE
  *   names as both member names and values; `parse_<Name>` raises ValueError
  *   on unknown wire values.
@@ -512,7 +514,10 @@ export function serializeExpr(ref: TypeRef, value: string, input: GeneratorInput
     case 'list':
       return `[${serializeExpr(ref.element, 'item', input)} for item in ${value}]`;
     case 'set':
-      // Deterministic wire output: sorted by element value.
+      // Deterministic wire output: the canonical Bridge set order (#117).
+      // Python's sorted() already implements it for the primitives Bridge
+      // allows in sets: numbers numerically, str by code point, bool
+      // False < True; sets are homogeneous by contract.
       return `sorted(${serializeSetElement(ref.element, value, input)})`;
     case 'map':
       return `{str(k): ${serializeExpr(ref.value, 'v', input)} for k, v in ${value}.items()}`;

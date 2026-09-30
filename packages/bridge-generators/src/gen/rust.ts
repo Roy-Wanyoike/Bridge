@@ -20,6 +20,9 @@
  *     This is a documented v1 wire-format caveat for Rust.
  * - Maps/sets use BTreeMap/BTreeSet for deterministic key ordering; serde
  *   serializes both as JSON arrays/objects per the Bridge wire format.
+ *   BTreeSet's ordering of primitives (numbers numerically, strings by
+ *   UTF-8 bytes, false < true) IS the canonical Bridge set order (#117),
+ *   so Rust needs no extra canonicalization.
  * - Optional fields are Option<T> with
  *   `#[serde(default, skip_serializing_if = "Option::is_none")]` so absent
  *   and null both decode to None.

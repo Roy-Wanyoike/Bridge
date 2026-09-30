@@ -14,8 +14,10 @@
  * - `int64`/`uint64` map to `number`: values above 2^53 lose precision —
  *   a documented caveat is attached to every such field.
  * - `bytes` maps to `Uint8Array`; on the JSON wire bytes are base64 strings.
- * - `set<T>` maps to `Set<T>`; the wire format is ALWAYS a JSON array, so
- *   types.ts also emits `setToArray`/`arrayToSet` converters.
+ * - `set<T>` maps to `Set<T>`; the wire format is ALWAYS a JSON array in
+ *   the canonical set order (numbers numeric, strings by code point,
+ *   false < true — identical in all six targets, #117), so types.ts also
+ *   emits `setToArray`/`arrayToSet` converters.
  * - `map<K,V>` maps to `Record<K,V>`.
  * - Tagged unions map to a discriminated union of
  *   `{ kind: '<variant>', value: <payload> }` members, matching the wire
@@ -279,8 +281,38 @@ function tsTypesFile(input: GeneratorInput): GeneratedFile | undefined {
 
   if (usesSets(input.ir)) {
     body += `${tsDoc(
-      'Converts a set into its JSON-array wire representation.',
-    )}\nexport function setToArray<T>(value: Set<T>): T[] {\n  return Array.from(value);\n}\n\n`;
+      [
+        'Converts a set into its JSON-array wire representation in the',
+        'canonical Bridge set order: numbers ascending numerically, strings',
+        'ascending by Unicode code point (UTF-8 byte order), false before',
+        'true. Every Bridge target language implements the same rule, so a',
+        'given set serializes to the identical array everywhere',
+        '(docs/SERIALIZATION.md, canonical rule 5).',
+      ].join('\n'),
+    )}\nexport function setToArray<T>(value: Set<T>): T[] {\n  return Array.from(value).sort(bridgeCompareSetElements);\n}\n\n`;
+    body += `${tsDoc(
+      'Canonical order for two same-family set elements (see setToArray).',
+    )}\nexport function bridgeCompareSetElements(a: unknown, b: unknown): number {\n`;
+    body += `  if (typeof a === 'number' && typeof b === 'number') return a - b;\n`;
+    body += `  if (typeof a === 'boolean' && typeof b === 'boolean') return (a ? 1 : 0) - (b ? 1 : 0);\n`;
+    body += `  if (typeof a === 'string' && typeof b === 'string') return bridgeCompareCodePoints(a, b);\n`;
+    body += `  return 0;\n}\n\n`;
+    body += `${tsDoc(
+      [
+        'Code-point order for strings: matches UTF-8 byte order (the',
+        'serialization canonical layer), deliberately NOT the UTF-16 code',
+        'unit order of `<`, which reorders supplementary characters.',
+      ].join('\n'),
+    )}\nfunction bridgeCompareCodePoints(a: string, b: string): number {\n`;
+    body += `  const ca = Array.from(a);\n`;
+    body += `  const cb = Array.from(b);\n`;
+    body += `  const n = Math.min(ca.length, cb.length);\n`;
+    body += `  for (let i = 0; i < n; i++) {\n`;
+    body += `    const x = ca[i]!.codePointAt(0)!;\n`;
+    body += `    const y = cb[i]!.codePointAt(0)!;\n`;
+    body += `    if (x !== y) return x - y;\n`;
+    body += `  }\n`;
+    body += `  return ca.length - cb.length;\n}\n\n`;
     body += `${tsDoc(
       'Converts a JSON-array wire representation into a Set.',
     )}\nexport function arrayToSet<T>(values: readonly T[]): Set<T> {\n  return new Set(values);\n}\n\n`;
