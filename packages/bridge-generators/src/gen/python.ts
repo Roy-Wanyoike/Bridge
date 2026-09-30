@@ -53,6 +53,7 @@ import { crossPackageRefs, sortedEvents, sortedServices, sortedTypes } from '../
 import { pythonEventsFileV2, pythonServerBlocks } from './python-wire';
 import {
   PYTHON_KEYWORDS,
+  PYTHON_RESERVED_MEMBERS,
   camelToScreamingSnake,
   camelToLowerSnake,
   pythonFieldName,
@@ -445,25 +446,32 @@ function renderStruct(
   }
   lines.push('        return out');
 
-  // from_dict — classmethod decoder.
+  // from_dict — classmethod decoder. The parameter (`raw_data`) and the
+  // per-field temp (`raw_value`) use bridge-prefixed raw-style names, not
+  // `data`/`raw`: a declared field sharing a decoder-local name would
+  // rebind it mid-decode (field `data` used to emit `data = data.get(...)`
+  // and the following `data.get(...)` raised AttributeError). Both names
+  // are in PYTHON_RESERVED_MEMBERS (naming.ts), so no declared field can
+  // ever take them either — defense in depth, mirroring the TS generator's
+  // __bridge_ validator locals.
   lines.push('');
   lines.push('    @classmethod');
-  lines.push(`    def from_dict(cls, data: "dict[str, Any]") -> "${type.name}":`);
+  lines.push(`    def from_dict(cls, raw_data: "dict[str, Any]") -> "${type.name}":`);
   lines.push(`        """Decode from the Bridge wire representation; raises ValueError on missing required fields."""`);
   for (const field of type.fields) {
     const key = JSON.stringify(field.name);
-    const expr = fromDictExpr(field, input, `data.get(${key})`);
+    const expr = fromDictExpr(field, input, `raw_data.get(${key})`);
     if (field.optional || field.default !== undefined) {
       const defExpr = dataclassDefault(field, input);
       const fallback = field.optional ? 'None' : (defExpr ?? 'None');
       // Explicit JSON null behaves like a missing key (parity with the Java
       // and C# decoders): it must not smuggle None past a field default.
-      lines.push(`        raw = data.get(${key})`);
-      lines.push(`        if raw is None:`);
-      lines.push(`            raw = ${fallback}`);
-      lines.push(`        ${pyField(field)} = ${deserializeExpr(field.type, 'raw', input, true)}`);
+      lines.push(`        raw_value = raw_data.get(${key})`);
+      lines.push(`        if raw_value is None:`);
+      lines.push(`            raw_value = ${fallback}`);
+      lines.push(`        ${pyField(field)} = ${deserializeExpr(field.type, 'raw_value', input, true)}`);
     } else {
-      lines.push(`        if data.get(${key}) is None:`);
+      lines.push(`        if raw_data.get(${key}) is None:`);
       lines.push(`            raise ValueError("Missing required field ${field.name} for ${type.name}")`);
       lines.push(`        ${pyField(field)} = ${expr}`);
     }
@@ -617,12 +625,12 @@ function renderUnion(
 
   lines.push('');
   lines.push('    @classmethod');
-  lines.push(`    def from_dict(cls, data: "dict[str, Any]") -> "${type.name}":`);
-  lines.push('        kind = data.get("kind")');
-  lines.push('        raw = data.get("value")');
+  lines.push(`    def from_dict(cls, raw_data: "dict[str, Any]") -> "${type.name}":`);
+  lines.push('        kind = raw_data.get("kind")');
+  lines.push('        raw_value = raw_data.get("value")');
   for (const variant of type.variants) {
     lines.push(`        if kind == ${JSON.stringify(variant.name)}:`);
-    lines.push(`            return cls(kind=${JSON.stringify(variant.name)}, value=${deserializeExpr(variant.type, 'raw', input, false)})`);
+    lines.push(`            return cls(kind=${JSON.stringify(variant.name)}, value=${deserializeExpr(variant.type, 'raw_value', input, false)})`);
   }
   lines.push('        raise ValueError(f"Unknown {type.__name__} kind: {kind!r}")');
   return lines.join('\n');
@@ -640,7 +648,15 @@ const PYTHON_UNION_RESERVED: ReadonlySet<string> = new Set(['self', 'kind', 'val
 
 function snakeMethod(variantName: string): string {
   const snake = camelToLowerSnake(variantName);
-  if (PYTHON_KEYWORDS.has(snake) || PYTHON_UNION_RESERVED.has(snake)) return `${snake}_`;
+  // PYTHON_RESERVED_MEMBERS is included so a variant named TO_DICT or
+  // FROM_DICT cannot shadow the union's own to_dict/from_dict methods.
+  if (
+    PYTHON_KEYWORDS.has(snake) ||
+    PYTHON_UNION_RESERVED.has(snake) ||
+    PYTHON_RESERVED_MEMBERS.has(snake)
+  ) {
+    return `${snake}_`;
+  }
   return snake;
 }
 

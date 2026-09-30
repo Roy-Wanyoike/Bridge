@@ -229,15 +229,18 @@ function renderEventPayload(event: IREvent, input: GeneratorInput): string {
 
   lines.push('');
   lines.push('    @classmethod');
-  lines.push(`    def from_dict(cls, data: "dict[str, Any]") -> "${event.name}":`);
+  // Decoder parameter is `raw_data` (not `data`): a payload field named
+  // `data` used to rebind the parameter mid-decode (issue #115). The name
+  // is in PYTHON_RESERVED_MEMBERS, so fields cannot take it either.
+  lines.push(`    def from_dict(cls, raw_data: "dict[str, Any]") -> "${event.name}":`);
   for (const field of event.fields) {
     const key = JSON.stringify(field.name);
     if (field.optional) {
-      lines.push(`        ${pyField(field)} = ${deserializeExpr(field.type, `data.get(${key})`, input, true)}`);
+      lines.push(`        ${pyField(field)} = ${deserializeExpr(field.type, `raw_data.get(${key})`, input, true)}`);
     } else {
-      lines.push(`        if data.get(${key}) is None:`);
+      lines.push(`        if raw_data.get(${key}) is None:`);
       lines.push(`            raise ValueError("Missing required field ${field.name} for ${event.name}")`);
-      lines.push(`        ${pyField(field)} = ${deserializeExpr(field.type, `data.get(${key})`, input, false)}`);
+      lines.push(`        ${pyField(field)} = ${deserializeExpr(field.type, `raw_data.get(${key})`, input, false)}`);
     }
   }
   lines.push('        return cls(');

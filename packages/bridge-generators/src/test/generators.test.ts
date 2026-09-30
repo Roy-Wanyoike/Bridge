@@ -586,5 +586,7 @@ test('hardening: doc comments cannot terminate blocks early', async () => {
 test('hardening: explicit JSON null does not bypass python field defaults', async () => {
   const text = generate(ir, { language: 'python' }).map((f) => f.content).join('\n');
   // The generated from_dict must route explicit null through the default.
-  assert.ok(/if raw is None:\n\s+raw = /.test(text), 'python null-vs-default parity missing');
+  // (Decoder temp is `raw_value` since issue #115; see naming.ts
+  // PYTHON_RESERVED_MEMBERS.)
+  assert.ok(/if raw_value is None:\n\s+raw_value = /.test(text), 'python null-vs-default parity missing');
 });
