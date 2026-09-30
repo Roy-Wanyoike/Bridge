@@ -61,10 +61,13 @@ export function isDemoMode(): boolean {
 /**
  * The registry service base URL for live mode, or `null` in demo mode.
  * Falls back to the documented local port when the env var is unset.
+ * An empty value counts as unset (the same rule `getRegistryClient` applies) —
+ * returning `''` would build relative fetch URLs against the console origin.
  */
 export function registryBaseUrl(): string | null {
   if (isDemoMode()) return null;
-  return process.env.NEXT_PUBLIC_REGISTRY_URL ?? 'http://localhost:4350';
+  const raw = process.env.NEXT_PUBLIC_REGISTRY_URL;
+  return raw !== undefined && raw !== '' ? raw : 'http://localhost:4350';
 }
 
 /**

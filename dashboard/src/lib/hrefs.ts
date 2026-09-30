@@ -44,7 +44,10 @@ export function contractHref(
   base: string,
   ...rest: string[]
 ): string {
-  return ['/contracts', org, project, base, ...rest].map(enc).join('/');
+  // The `/contracts` root is literal route syntax, not a segment: encoding it
+  // too produced hrefs like `%2Fcontracts/...` — a broken relative URL on
+  // every contract link (caught by the #123 page-render tests).
+  return `/contracts/${[org, project, base, ...rest].map(enc).join('/')}`;
 }
 
 /**
