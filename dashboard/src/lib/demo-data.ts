@@ -28,7 +28,7 @@ import type {
   OverviewData,
   SchemaSummary,
   VersionDetail,
-  VersionMeta,
+  VersionRef,
 } from './types';
 import { shortHash } from './format';
 
@@ -1002,22 +1002,14 @@ export function demoGetContract(org: string, project: string, base: string): Con
   return c ? demoContractSummary(c) : null;
 }
 
-export function demoListVersions(org: string, project: string, base: string): VersionMeta[] {
+export function demoListVersions(org: string, project: string, base: string): VersionRef[] {
   const c = contractsByKey.get(`${org}/${project}/${base}`);
   if (!c) return [];
-  return c.versions.map((v) => ({
-    packageName: `${c.base}.${v.version}`,
-    base: c.base,
-    version: v.version,
-    hash: v.hash,
-    shortHash: shortHash(v.hash),
-    imports: v.imports,
-    publishedAt: v.publishedAt,
-    publisher: v.publisher,
-    owner: c.owner,
-    repository: c.repository,
-    languages: v.languages,
-  }));
+  // Parity with the live list route, which serves plain version strings and
+  // no metadata (issue #121): the demo must be exactly as (in)complete, so
+  // the pages enrich through the same getVersion pull in both modes and a
+  // demo-only metadata shortcut can never mask a live-mode break again.
+  return c.versions.map((v) => ({ version: v.version }));
 }
 
 export function demoGetVersion(

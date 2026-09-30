@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ChevronRight, ListTree, ShieldCheck, ShieldX, Users } from 'lucide-react';
+import { ChevronRight, GitCompareArrows, ListTree, ShieldCheck, ShieldX, Users } from 'lucide-react';
 import { ClassificationBadge } from '@/components/classification-badge';
 import { DiffVersionPicker } from '@/components/diff-version-picker';
 import { EmptyState } from '@/components/empty-state';
@@ -68,11 +68,10 @@ export default async function DiffPage({
   const summary = await client.getContract(org, project, contract);
   if (!summary) notFound();
 
-  // API order is not guaranteed: sort by publication time so "latest" and
-  // the adjacent-version diff window are chronological.
-  const versions = (await client.listVersions(org, project, contract)).sort((a, b) =>
-    a.publishedAt.localeCompare(b.publishedAt),
-  );
+  // The versions list route serves version strings in registry order
+  // (publish order on both storage backends) — the chronological order the
+  // adjacent-version window and the picker rely on.
+  const versions = await client.listVersions(org, project, contract);
   if (versions.length === 0) notFound();
 
   // Explicit but unknown from/to in a shared deep link must 404 — silently
@@ -80,13 +79,46 @@ export default async function DiffPage({
   if (sp.from !== undefined && !versions.some((v) => v.version === sp.from)) notFound();
   if (sp.to !== undefined && !versions.some((v) => v.version === sp.to)) notFound();
 
-  const from =
-    sp.from ?? versions[versions.length - 2]?.version ?? versions[0].version;
   const to = sp.to ?? versions[versions.length - 1].version;
+  // Single-version contracts have no adjacent version to diff against; the
+  // old fallback silently produced a from === to pair — an empty, misleading
+  // report — so an explicit empty state renders instead (issue #121).
+  const from =
+    sp.from ?? (versions.length >= 2 ? versions[versions.length - 2].version : undefined);
+
+  if (from === undefined) {
+    return (
+      <div className="mx-auto flex max-w-6xl flex-col gap-6">
+        {/* Breadcrumb */}
+        <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-sm text-muted-foreground">
+          <Link href="/contracts" className="hover:text-foreground">
+            Contracts
+          </Link>
+          <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+          <Link
+            href={`/contracts/${encodeURIComponent(org)}/${encodeURIComponent(project)}/${encodeURIComponent(contract)}`}
+            className="font-mono hover:text-foreground"
+          >
+            {contract}
+          </Link>
+          <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+          <span>compatibility</span>
+        </nav>
+        <EmptyState
+          icon={GitCompareArrows}
+          title="No adjacent version to diff against"
+          description={`${contract} has a single published version (${to}). Publish another version of ${contract} to generate a compatibility report.`}
+        />
+      </div>
+    );
+  }
 
   const report = await client.getDiff(org, project, contract, from, to);
   if (!report) notFound();
-  const toVersion = versions.find((v) => v.version === to) ?? versions[versions.length - 1];
+  // One targeted pull for the target version's publication time — the list
+  // route serves no metadata; when the pull comes back empty the header
+  // simply omits the timestamp instead of failing.
+  const toDetail = await client.getVersion(org, project, contract, to);
   const banner = VERDICT_BANNER[report.verdict];
   const copy = VERDICT_COPY[report.verdict];
 
@@ -113,8 +145,12 @@ export default async function DiffPage({
             <span className="font-mono">{from}</span>
             <span aria-hidden="true">→</span>
             <span className="font-mono text-foreground">{to}</span>
-            <span aria-hidden="true">·</span>
-            <span>{formatDateTime(toVersion.publishedAt)}</span>
+            {toDetail?.publishedAt && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{formatDateTime(toDetail.publishedAt)}</span>
+              </>
+            )}
           </p>
         </div>
         <DiffVersionPicker basePath={`/contracts/${org}/${project}/${contract}`} versions={versions} from={from} to={to} />
@@ -157,20 +193,26 @@ export default async function DiffPage({
         </Card>
         <Card className="p-5">
           <CardDescription>Consumers discovered</CardDescription>
-          <CardTitle className="mt-2 text-3xl tabular-nums">{report.impact.dependents}</CardTitle>
-          <p className="mt-1 text-xs text-muted-foreground">transitive dependents in the registry</p>
+          <CardTitle className="mt-2 text-3xl tabular-nums">
+            {report.impact ? report.impact.dependents : '—'}
+          </CardTitle>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {report.impact
+              ? 'transitive dependents in the registry'
+              : 'consumer impact not served by this registry'}
+          </p>
         </Card>
         <Card className="p-5">
           <CardDescription>Consumers affected</CardDescription>
           <CardTitle className="mt-2 text-3xl tabular-nums text-[var(--warning)]">
-            {report.impact.affected}
+            {report.impact ? report.impact.affected : '—'}
           </CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">reached by a non-SAFE change</p>
         </Card>
         <Card className="p-5">
           <CardDescription>Consumers breaking</CardDescription>
           <CardTitle className="mt-2 text-3xl tabular-nums text-[var(--breaking)]">
-            {report.impact.breakingAffected}
+            {report.impact ? report.impact.breakingAffected : '—'}
           </CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">must migrate before this ships</p>
         </Card>
@@ -220,7 +262,11 @@ export default async function DiffPage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {report.impact.consumers.length === 0 ? (
+            {report.impact === undefined ? (
+              <p className="text-sm text-muted-foreground">
+                Consumer impact is not part of the diff response this registry serves.
+              </p>
+            ) : report.impact.consumers.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No dependents discovered for this contract.
               </p>

@@ -236,7 +236,9 @@ export default async function OverviewPage() {
                     )}
                   </span>
                   <span>
-                    {r.impact.affected}/{r.impact.dependents} consumers affected
+                    {r.impact
+                      ? `${r.impact.affected}/${r.impact.dependents} consumers affected`
+                      : 'consumer impact unavailable'}
                   </span>
                 </div>
               </Link>
