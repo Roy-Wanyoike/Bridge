@@ -27,8 +27,8 @@ import {
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatDateTime, LANGUAGE_LABELS } from '@/lib/format';
-import { getRegistryClient } from '@/lib/registry-client';
-import type { Classification, VersionMeta } from '@/lib/types';
+import { getRegistryClient, mapBounded } from '@/lib/registry-client';
+import type { Classification, VersionDetail, VersionRef } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,23 +49,42 @@ export default async function ContractDetailPage({ params }: { params: Params })
   const summary = await client.getContract(org, project, contract);
   if (!summary) notFound();
 
-  // API order is not guaranteed: index everything by publication time so
-  // "latest" and adjacent-diff windows are chronological.
-  const versions = (await client.listVersions(org, project, contract)).sort((a, b) =>
-    a.publishedAt.localeCompare(b.publishedAt),
+  // The versions list route serves plain version strings (VersionRef, issue
+  // #121) — no metadata. The timeline renders publisher/hash/imports per
+  // version, so pull exactly the rows we display with bounded concurrency
+  // instead of enriching every version inside the client for every caller.
+  // A pull that comes back empty leaves that row sparse (honest "metadata
+  // unavailable") while the rest of the page renders.
+  const versionRefs = await client.listVersions(org, project, contract);
+  const details = await mapBounded(versionRefs, 8, (ref) =>
+    client.getVersion(org, project, contract, ref.version),
   );
-  const latest = versions[versions.length - 1];
+  const versions: { ref: VersionRef; detail: VersionDetail | null }[] = versionRefs.map(
+    (ref, i) => ({ ref, detail: details[i] ?? null }),
+  );
+  // Chronological order when publication times exist; versions without
+  // metadata keep registry order (stable sort) — never an invented date.
+  versions.sort((a, b) =>
+    a.detail?.publishedAt !== undefined && b.detail?.publishedAt !== undefined
+      ? a.detail.publishedAt.localeCompare(b.detail.publishedAt)
+      : 0,
+  );
+  const latest = versions[versions.length - 1] ?? null;
 
-  // Latest detail, consumers of the latest version, and every adjacent-pair
-  // diff verdict are independent — one batched round instead of N−1 serial
-  // registry round-trips (19 awaited sequentially for 20 versions before).
-  const [latestDetail, consumers, verdictByVersion] = await Promise.all([
-    latest ? client.getVersion(org, project, contract, latest.version) : Promise.resolve(null),
-    latest ? client.listConsumers(org, project, contract, latest.version) : Promise.resolve([]),
+  // Consumers of the latest version and every adjacent-pair diff verdict are
+  // independent — one batched round instead of N−1 serial registry
+  // round-trips (19 awaited sequentially for 20 versions before). The latest
+  // version's detail is already in hand from the enrichment pass above.
+  const [consumers, verdictByVersion] = await Promise.all([
+    latest
+      ? client.listConsumers(org, project, contract, latest.ref.version)
+      : Promise.resolve([]),
     (async () => {
-      const pairs = versions.slice(1).map((v, i) => ({ from: versions[i].version, to: v.version }));
-      const reports = await Promise.all(
-        pairs.map((p) => client.getDiff(org, project, contract, p.from, p.to)),
+      const pairs = versions
+        .slice(1)
+        .map((v, i) => ({ from: versions[i].ref.version, to: v.ref.version }));
+      const reports = await mapBounded(pairs, 8, (p) =>
+        client.getDiff(org, project, contract, p.from, p.to),
       );
       const map = new Map<string, { from: string; verdict: Classification }>();
       pairs.forEach((p, i) => {
@@ -76,6 +95,7 @@ export default async function ContractDetailPage({ params }: { params: Params })
     })(),
   ]);
 
+  const latestDetail = latest?.detail ?? null;
   const publishers = publisherRollup(versions);
 
   return (
@@ -176,17 +196,18 @@ export default async function ContractDetailPage({ params }: { params: Params })
             />
           ) : (
             <ol className="relative flex flex-col gap-6 border-l border-border pl-6">
-            {[...versions].reverse().map((v, idx) => {
-              const vd = verdictByVersion.get(v.version);
+            {[...versions].reverse().map((entry, idx) => {
+              const v = entry.detail;
+              const vd = verdictByVersion.get(entry.ref.version);
               return (
-                <li key={v.version} className="relative">
+                <li key={entry.ref.version} className="relative">
                   <CircleDot
                     className="absolute -left-[31px] top-1 h-3.5 w-3.5 text-primary"
                     aria-hidden="true"
                   />
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                     <Badge variant="secondary" className="font-mono text-[13px]">
-                      {v.version}
+                      {entry.ref.version}
                     </Badge>
                     {idx === 0 && (
                       <Badge variant="default" className="text-[10px] uppercase tracking-wider">
@@ -195,40 +216,46 @@ export default async function ContractDetailPage({ params }: { params: Params })
                     )}
                     {vd && (
                       <Link
-                        href={`/contracts/${encodeURIComponent(org)}/${encodeURIComponent(project)}/${encodeURIComponent(contract)}/diff?from=${encodeURIComponent(vd.from)}&to=${encodeURIComponent(v.version)}`}
+                        href={`/contracts/${encodeURIComponent(org)}/${encodeURIComponent(project)}/${encodeURIComponent(contract)}/diff?from=${encodeURIComponent(vd.from)}&to=${encodeURIComponent(entry.ref.version)}`}
                         className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
                       >
-                        diff {vd.from} → {v.version}
+                        diff {vd.from} → {entry.ref.version}
                         <ClassificationBadge classification={vd.verdict} withDot={false} />
                       </Link>
                     )}
                   </div>
-                  <div className="mt-2 grid gap-x-8 gap-y-1 text-sm text-muted-foreground sm:grid-cols-2">
-                    <span>
-                      Published by <span className="text-foreground">{v.publisher}</span>
-                    </span>
-                    <span>{formatDateTime(v.publishedAt)}</span>
-                    <span className="inline-flex items-center gap-1 font-mono text-[12px] text-zinc-400">
-                      sha256:{v.shortHash}
-                      <CopyButton value={v.hash} label="Copy hash" className="h-6 px-1.5" />
-                    </span>
-                    <span className="inline-flex items-center gap-2">
-                      languages <LanguageBadges languages={v.languages} />
-                    </span>
-                    {v.imports.length > 0 && (
-                      <span className="sm:col-span-2">
-                        imports{' '}
-                        {v.imports.map((imp) => (
-                          <span
-                            key={imp}
-                            className="mr-1.5 inline-block rounded bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-secondary-foreground"
-                          >
-                            {imp}
-                          </span>
-                        ))}
+                  {v === null ? (
+                    <p className="mt-2 text-sm text-muted-foreground/80">
+                      Metadata for this version is unavailable from the registry.
+                    </p>
+                  ) : (
+                    <div className="mt-2 grid gap-x-8 gap-y-1 text-sm text-muted-foreground sm:grid-cols-2">
+                      <span>
+                        Published by <span className="text-foreground">{v.publisher}</span>
                       </span>
-                    )}
-                  </div>
+                      <span>{formatDateTime(v.publishedAt)}</span>
+                      <span className="inline-flex items-center gap-1 font-mono text-[12px] text-zinc-400">
+                        sha256:{v.shortHash}
+                        <CopyButton value={v.hash} label="Copy hash" className="h-6 px-1.5" />
+                      </span>
+                      <span className="inline-flex items-center gap-2">
+                        languages <LanguageBadges languages={v.languages} />
+                      </span>
+                      {v.imports.length > 0 && (
+                        <span className="sm:col-span-2">
+                          imports{' '}
+                          {v.imports.map((imp) => (
+                            <span
+                              key={imp}
+                              className="mr-1.5 inline-block rounded bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-secondary-foreground"
+                            >
+                              {imp}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </li>
               );
             })}
@@ -426,13 +453,20 @@ function ProducerChips({
   );
 }
 
-function publisherRollup(versions: VersionMeta[]) {
+function publisherRollup(versions: { detail: VersionDetail | null }[]) {
   const map = new Map<string, { actor: string; versions: string[]; lastAt: string }>();
-  for (const v of versions) {
-    const entry = map.get(v.publisher) ?? { actor: v.publisher, versions: [], lastAt: v.publishedAt };
-    entry.versions.push(v.version);
-    if (v.publishedAt > entry.lastAt) entry.lastAt = v.publishedAt;
-    map.set(v.publisher, entry);
+  for (const { detail } of versions) {
+    // Versions without metadata have no attributable publisher — skipped
+    // rather than rolled into a fabricated "unknown" actor.
+    if (detail === null) continue;
+    const entry = map.get(detail.publisher) ?? {
+      actor: detail.publisher,
+      versions: [],
+      lastAt: detail.publishedAt,
+    };
+    entry.versions.push(detail.version);
+    if (detail.publishedAt > entry.lastAt) entry.lastAt = detail.publishedAt;
+    map.set(detail.publisher, entry);
   }
   return [...map.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
 }

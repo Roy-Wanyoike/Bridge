@@ -1,7 +1,10 @@
 import type {
+  AffectedConsumer,
   AuditEntry,
   AuditFilters,
+  Change,
   Classification,
+  ConsumerImpact,
   ConsumerRef,
   ContractSummary,
   DiffReport,
@@ -11,7 +14,7 @@ import type {
   OverviewData,
   RegistryClient,
   VersionDetail,
-  VersionMeta,
+  VersionRef,
 } from './types';
 import {
   DEMO_MODE_DEFAULT,
@@ -149,7 +152,7 @@ function pickArray(body: Record<string, unknown>, keys: string[], path: string):
     if (Array.isArray(v)) return v;
   }
   throw new RegistryError(
-    `RegistryUnreachable: registry response for GET ${path} has none of the expected array keys [${keys.join(', ')}] — API schema drift`,
+    `RegistryInvalidResponse: registry response for GET ${path} has none of the expected array keys [${keys.join(', ')}] — API schema drift`,
     { status: 0, path },
   );
 }
@@ -167,9 +170,11 @@ function enc(segment: string): string {
  * Maps `items` through an async `fn` with at most `limit` promises in flight
  * (worker-pool style, order-preserving). The overview used to fan out one
  * unbounded `Promise.all` per candidate contract — hundreds of sockets and a
- * hammered registry on large installations.
+ * hammered registry on large installations. Exported so pages that enrich
+ * list results (contract detail timeline) reuse the same discipline instead
+ * of raw `Promise.all` fan-outs.
  */
-async function mapBounded<T, R>(
+export async function mapBounded<T, R>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<R>,
@@ -215,11 +220,107 @@ interface ServiceContractMeta {
 }
 
 function isServiceContractMeta(v: unknown): v is ServiceContractMeta {
+  const m = v as ServiceContractMeta;
   return (
     typeof v === 'object' && v !== null &&
-    typeof (v as ServiceContractMeta).packageName === 'string' &&
-    typeof (v as ServiceContractMeta).version === 'string' &&
-    typeof (v as ServiceContractMeta).hash === 'string'
+    typeof m.packageName === 'string' &&
+    typeof m.base === 'string' &&
+    typeof m.version === 'string' &&
+    typeof m.hash === 'string' &&
+    // The service records publishedAt + imports on every publish (both
+    // storage drivers); their absence is schema drift, not optional
+    // metadata — a missing publishedAt would silently corrupt every
+    // chronological view downstream.
+    typeof m.publishedAt === 'string' &&
+    Array.isArray(m.imports)
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Wire-level response validation                                       */
+/*                                                                      */
+/* The REST client never trusts a live payload blindly: every field a    */
+/* page dereferences is re-checked, and a drifted payload throws a       */
+/* RegistryError (handled by error.tsx) instead of surfacing as a raw    */
+/* TypeError deep inside a render.                                       */
+/* ------------------------------------------------------------------ */
+
+/** The four classifications the compat engine emits. */
+const CLASSIFICATIONS: readonly string[] = ['SAFE', 'WARNING', 'BREAKING', 'UNKNOWN'];
+
+function isClassification(v: unknown): v is Classification {
+  return typeof v === 'string' && CLASSIFICATIONS.includes(v);
+}
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+/** Diff summary: all four counters present and numeric. */
+function isDiffSummary(v: unknown): v is DiffReport['summary'] {
+  const s = v as DiffReport['summary'];
+  return (
+    typeof v === 'object' && v !== null &&
+    isFiniteNumber(s.safe) &&
+    isFiniteNumber(s.warning) &&
+    isFiniteNumber(s.breaking) &&
+    isFiniteNumber(s.unknown)
+  );
+}
+
+/** One change row: the fields ChangeRow renders must all be present. */
+function isChangeElement(v: unknown): v is Change {
+  const c = v as Change;
+  return (
+    typeof v === 'object' && v !== null &&
+    typeof c.path === 'string' &&
+    typeof c.kind === 'string' &&
+    isClassification(c.classification) &&
+    typeof c.message === 'string'
+  );
+}
+
+/** One consumer-impact row (isServiceContractMeta pattern, narrowed to what AffectedConsumer renders). */
+function isAffectedConsumerElement(v: unknown): v is AffectedConsumer {
+  const c = v as AffectedConsumer;
+  return (
+    typeof v === 'object' && v !== null &&
+    typeof c.packageName === 'string' &&
+    typeof c.version === 'string' &&
+    typeof c.org === 'string' &&
+    typeof c.project === 'string' &&
+    isFiniteNumber(c.depth) &&
+    isClassification(c.severity) &&
+    typeof c.reason === 'string' &&
+    Array.isArray(c.viaTypes) &&
+    c.viaTypes.every((t) => typeof t === 'string')
+  );
+}
+
+/** Impact roll-up: counters numeric, consumers an array (rows checked separately). */
+function isConsumerImpact(v: unknown): v is ConsumerImpact {
+  const i = v as ConsumerImpact;
+  return (
+    typeof v === 'object' && v !== null &&
+    isFiniteNumber(i.dependents) &&
+    isFiniteNumber(i.affected) &&
+    isFiniteNumber(i.breakingAffected) &&
+    Array.isArray(i.consumers)
+  );
+}
+
+/** One consumers-route row (a dependent ContractMeta), narrowed to the fields ConsumerRef renders. */
+function isDependentMeta(
+  v: unknown,
+): v is { org: string; project: string; packageName: string; base: string; version: string } {
+  const m = v as { org: string; project: string; packageName: string; base: string; version: string };
+  return (
+    typeof v === 'object' && v !== null &&
+    typeof m.org === 'string' &&
+    typeof m.project === 'string' &&
+    typeof m.packageName === 'string' &&
+    typeof m.base === 'string' &&
+    typeof m.version === 'string'
   );
 }
 
@@ -255,10 +356,18 @@ export class RestRegistryClient implements RegistryClient {
       );
     }
     if (!res.ok) {
-      throw new RegistryError(`RegistryUnreachable: registry ${res.status} on GET ${path}`, {
-        status: res.status,
-        path,
-      });
+      // 4xx means the request itself is wrong (bad credential, bad
+      // coordinates) — a configuration problem, not an outage. 5xx (and
+      // anything else) means the registry is failing or unreachable. The
+      // message prefix drives the error-boundary copy; the numeric status
+      // stays on the error for programmatic checks (isNotFound).
+      const rejected = res.status >= 400 && res.status < 500;
+      throw new RegistryError(
+        rejected
+          ? `RegistryRejected: registry returned ${res.status} for GET ${path} — check REGISTRY_TOKEN and REGISTRY_ORGS (server-side)`
+          : `RegistryUnreachable: registry returned ${res.status} for GET ${path}`,
+        { status: res.status, path },
+      );
     }
     return (await res.json()) as T;
   }
@@ -305,7 +414,7 @@ export class RestRegistryClient implements RegistryClient {
     const meta = body['meta'];
     if (!isServiceContractMeta(meta)) {
       throw new RegistryError(
-        `RegistryUnreachable: registry response for GET ${path} has an unexpected shape — API schema drift`,
+        `RegistryInvalidResponse: registry response for GET ${path} has an unexpected shape — API schema drift`,
         { status: 0, path },
       );
     }
@@ -403,14 +512,36 @@ export class RestRegistryClient implements RegistryClient {
     return latest ?? null;
   }
 
-  async listVersions(org: string, project: string, base: string): Promise<VersionMeta[]> {
+  /**
+   * Version strings in registry order (publish order on both storage
+   * backends). This is the honest payload of the list route — no metadata.
+   *
+   * Approach note (issue #121): `listVersions` deliberately does NOT enrich
+   * each entry through the per-version pull routes. Enrichment inside the
+   * client would multiply request fan-out by the version count for every
+   * caller — including the overview, which needs only the two newest ids —
+   * while the one caller that renders metadata (the contract detail
+   * timeline) pulls exactly the rows it displays via `mapBounded(…, 8)`.
+   * The narrow `VersionRef` keeps the type system honest: nothing here
+   * pretends the list route serves `VersionMeta`.
+   */
+  private async listVersionIds(org: string, project: string, base: string): Promise<string[]> {
     const path = `/v1/orgs/${enc(org)}/projects/${enc(project)}/contracts/${enc(base)}/versions`;
     const body = await this.get<Record<string, unknown>>(path);
-    const versions = pickArray(body, ['versions'], path);
-    // The service's versions route returns version strings; the per-version
-    // metadata lives on the pull routes. getVersion()/latestSummary() enrich
-    // where the UI needs it.
-    return versions.map((v) => ({ version: String(v) })) as VersionMeta[];
+    return pickArray(body, ['versions'], path).map((v) => {
+      if (typeof v !== 'string' || v === '') {
+        throw new RegistryError(
+          `RegistryInvalidResponse: registry response for GET ${path} has a non-string version entry — API schema drift`,
+          { status: 0, path },
+        );
+      }
+      return v;
+    });
+  }
+
+  async listVersions(org: string, project: string, base: string): Promise<VersionRef[]> {
+    const versions = await this.listVersionIds(org, project, base);
+    return versions.map((version) => ({ version }));
   }
 
   async getVersion(
@@ -426,7 +557,7 @@ export class RestRegistryClient implements RegistryClient {
       const ir = body['ir'] as { imports?: string[]; types?: unknown[]; services?: unknown[]; events?: unknown[] } | undefined;
       if (!isServiceContractMeta(meta) || typeof ir !== 'object' || ir === null) {
         throw new RegistryError(
-          `RegistryUnreachable: registry response for GET ${path} has an unexpected shape — API schema drift`,
+          `RegistryInvalidResponse: registry response for GET ${path} has an unexpected shape — API schema drift`,
           { status: 0, path },
         );
       }
@@ -469,17 +600,23 @@ export class RestRegistryClient implements RegistryClient {
     const body = await this.get<Record<string, unknown>>(path);
     const consumers = pickArray(body, ['consumers'], path);
     // The service returns the dependents as ContractMeta[] — direct
-    // dependents only (BFS depth 1). Project them into ConsumerRefs.
+    // dependents only (BFS depth 1). Every field ConsumerRef renders is
+    // validated; a malformed row is schema drift, not a silent undefined.
     return consumers.map((c) => {
-      const m = c as ServiceContractMeta;
+      if (!isDependentMeta(c)) {
+        throw new RegistryError(
+          `RegistryInvalidResponse: registry response for GET ${path} has a consumer row with an unexpected shape — API schema drift`,
+          { status: 0, path },
+        );
+      }
       return {
-        packageName: m.packageName,
-        base: m.base,
-        org: m.org,
-        project: m.project,
-        version: m.version,
+        packageName: c.packageName,
+        base: c.base,
+        org: c.org,
+        project: c.project,
+        version: c.version,
         depth: 1,
-      } as ConsumerRef;
+      };
     });
   }
 
@@ -494,7 +631,69 @@ export class RestRegistryClient implements RegistryClient {
     try {
       const body = await this.get<Record<string, unknown>>(path);
       // The service computes the report from the two stored IRs; its
-      // response leaves the route coordinates implicit.
+      // response leaves the route coordinates implicit and (today) does not
+      // serve the consumer-impact roll-up. Every field a page dereferences
+      // is validated: a drifted payload must fail loudly here, never as a
+      // raw TypeError deep inside a render.
+      const verdict = body['verdict'];
+      if (!isClassification(verdict)) {
+        throw new RegistryError(
+          `RegistryInvalidResponse: registry response for GET ${path} has no valid verdict — API schema drift`,
+          { status: 0, path },
+        );
+      }
+      const summary = body['summary'];
+      if (!isDiffSummary(summary)) {
+        throw new RegistryError(
+          `RegistryInvalidResponse: registry response for GET ${path} has an invalid summary — API schema drift`,
+          { status: 0, path },
+        );
+      }
+      const changesRaw = body['changes'] ?? [];
+      if (!Array.isArray(changesRaw)) {
+        throw new RegistryError(
+          `RegistryInvalidResponse: registry response for GET ${path} has non-array changes — API schema drift`,
+          { status: 0, path },
+        );
+      }
+      const changes: Change[] = [];
+      for (const row of changesRaw) {
+        if (!isChangeElement(row)) {
+          throw new RegistryError(
+            `RegistryInvalidResponse: registry response for GET ${path} has a malformed change row — API schema drift`,
+            { status: 0, path },
+          );
+        }
+        changes.push(row);
+      }
+      // Impact is optional on the wire (the service's diff route omits it);
+      // when present, its shape is validated, never trusted.
+      const impactRaw = body['impact'];
+      let impact: ConsumerImpact | undefined;
+      if (impactRaw !== undefined && impactRaw !== null) {
+        if (!isConsumerImpact(impactRaw)) {
+          throw new RegistryError(
+            `RegistryInvalidResponse: registry response for GET ${path} has a malformed impact roll-up — API schema drift`,
+            { status: 0, path },
+          );
+        }
+        const consumers: AffectedConsumer[] = [];
+        for (const row of impactRaw.consumers) {
+          if (!isAffectedConsumerElement(row)) {
+            throw new RegistryError(
+              `RegistryInvalidResponse: registry response for GET ${path} has a malformed impact consumer row — API schema drift`,
+              { status: 0, path },
+            );
+          }
+          consumers.push(row);
+        }
+        impact = {
+          dependents: impactRaw.dependents,
+          affected: impactRaw.affected,
+          breakingAffected: impactRaw.breakingAffected,
+          consumers,
+        };
+      }
       return {
         org,
         project,
@@ -502,10 +701,10 @@ export class RestRegistryClient implements RegistryClient {
         packageName: `${base}.${to}`,
         from: typeof body['from'] === 'string' ? body['from'] : from,
         to: typeof body['to'] === 'string' ? body['to'] : to,
-        verdict: body['verdict'] as DiffReport['verdict'],
-        summary: body['summary'] as DiffReport['summary'],
-        changes: (body['changes'] ?? []) as DiffReport['changes'],
-        impact: body['impact'] as DiffReport['impact'],
+        verdict,
+        summary,
+        changes,
+        impact,
       };
     } catch (err) {
       if (isNotFound(err)) return null;
@@ -587,31 +786,53 @@ export class RestRegistryClient implements RegistryClient {
       this.listAudit(),
     ]);
     const publishes = audit.filter((e) => e.action === 'publish');
+    // Publish timestamps come from the audit trail already loaded above — a
+    // validated source in memory. Joining here keeps the attention list
+    // ordered by the target version's publish time with zero extra requests
+    // (the versions list route serves no metadata to sort by).
+    const publishedAt = new Map<string, string>();
+    for (const e of publishes) {
+      if (e.version === undefined || e.at === '') continue;
+      publishedAt.set(`${e.org}/${e.project}/${e.contract}@${e.version}`, e.at);
+    }
     const candidates = contracts.filter(
       (c) => c.latestVerdict && c.latestVerdict !== 'SAFE',
     );
 
     // All (versions → diff) lookups run with bounded concurrency (8 in
     // flight) so a large registry can never exhaust sockets or hammer the
-    // service, and the attention list is ordered by the target version's
-    // publish time — a lexicographic version sort puts 0.10.0 before 0.9.0.
-    const verdicts = await mapBounded(candidates, 8, async (c) => {
-      const versions = await this.listVersions(c.org, c.project, c.base);
-      if (versions.length < 2) return null;
-      const target = versions[versions.length - 1];
-      const diff = await this.getDiff(
-        c.org,
-        c.project,
-        c.base,
-        versions[versions.length - 2].version,
-        target.version,
-      );
-      if (!diff || diff.verdict === 'SAFE') return null;
-      return { diff, publishedAt: target.publishedAt };
-    });
+    // service. Only version IDs are fetched — the overview never pays for
+    // per-version metadata it does not render.
+    type AttentionEntry = { diff: DiffReport; publishedAt?: string };
+    const verdicts = await mapBounded<ContractSummary, AttentionEntry | null>(
+      candidates,
+      8,
+      async (c): Promise<AttentionEntry | null> => {
+        const versions = await this.listVersionIds(c.org, c.project, c.base);
+        if (versions.length < 2) return null;
+        const previous = versions[versions.length - 2]!;
+        const target = versions[versions.length - 1]!;
+        const diff = await this.getDiff(c.org, c.project, c.base, previous, target);
+        if (!diff || diff.verdict === 'SAFE') return null;
+        return {
+          diff,
+          publishedAt: publishedAt.get(`${c.org}/${c.project}/${c.base}@${target}`),
+        };
+      },
+    );
     const recentBreaking = verdicts
-      .filter((v): v is { diff: DiffReport; publishedAt: string } => v !== null)
-      .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+      .filter((v): v is AttentionEntry => v !== null)
+      // Newest first by publish time; entries whose publish time the audit
+      // trail does not cover keep registry order at the end — never sorted
+      // by an invented timestamp.
+      .sort((a, b) => {
+        if (a.publishedAt !== undefined && b.publishedAt !== undefined) {
+          return b.publishedAt.localeCompare(a.publishedAt);
+        }
+        if (a.publishedAt !== undefined) return -1;
+        if (b.publishedAt !== undefined) return 1;
+        return 0;
+      })
       .map((v) => v.diff);
     return {
       contracts: contracts.length,
@@ -671,7 +892,7 @@ export class DemoRegistryClient implements RegistryClient {
   getContract(org: string, project: string, base: string): Promise<ContractSummary | null> {
     return Promise.resolve(demoGetContract(org, project, base));
   }
-  listVersions(org: string, project: string, base: string): Promise<VersionMeta[]> {
+  listVersions(org: string, project: string, base: string): Promise<VersionRef[]> {
     return Promise.resolve(demoListVersions(org, project, base));
   }
   getVersion(

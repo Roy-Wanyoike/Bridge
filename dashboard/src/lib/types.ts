@@ -83,7 +83,12 @@ export interface DiffReport {
   summary: DiffSummary;
   /** Changes in canonical order: BREAKING, UNKNOWN, WARNING, SAFE. */
   changes: Change[];
-  impact: ConsumerImpact;
+  /**
+   * Consumer impact roll-up. The registry service's diff route does not
+   * serve reachability analysis yet, so live reports carry no impact; the
+   * UI degrades to placeholders instead of fabricating numbers.
+   */
+  impact?: ConsumerImpact;
 }
 
 /** Names declared by a contract version, straight from the compiled IR. */
@@ -93,6 +98,17 @@ export interface SchemaSummary {
   services: string[];
   events: string[];
   aliases: string[];
+}
+
+/**
+ * Version identity as the registry's list route serves it: a plain version
+ * string. The route carries no metadata (no hash, timestamps, imports), so
+ * consumers render metadata only after enriching through `getVersion` (the
+ * pull route) — never fabricated from a list response.
+ */
+export interface VersionRef {
+  /** Normalized version, e.g. `v3`. */
+  version: string;
 }
 
 /** Public metadata for one immutable, published contract version. */
@@ -233,7 +249,8 @@ export interface RegistryClient {
   listContracts(org: string, project: string): Promise<ContractSummary[]>;
   listAllContracts(org?: string): Promise<ContractSummary[]>;
   getContract(org: string, project: string, base: string): Promise<ContractSummary | null>;
-  listVersions(org: string, project: string, base: string): Promise<VersionMeta[]>;
+  /** Version refs in registry order — the list route serves no metadata; enrich via `getVersion`. */
+  listVersions(org: string, project: string, base: string): Promise<VersionRef[]>;
   getVersion(
     org: string,
     project: string,
