@@ -15,10 +15,11 @@ npm install
 npm run dev          # http://localhost:3000 — demo mode, no backend needed
 ```
 
-The dashboard boots in **demo mode** by default: it renders a realistic
-seeded dataset derived from the example contracts (`examples/*.bridge`),
-including deliberate breaking-change scenarios, so the UI is fully browsable
-with zero backend.
+The dashboard boots in **demo mode** by default under `next dev`: it renders a
+realistic seeded dataset derived from the example contracts
+(`examples/*.bridge`), including deliberate breaking-change scenarios, so the
+UI is fully browsable with zero backend. Production builds default to **live**
+mode instead (see the environment table below for the exact switch logic).
 
 ## Going live
 
@@ -54,7 +55,34 @@ serves a bare error digest where a hint belongs.
 The REST client (`src/lib/registry-client.ts`) targets the service API:
 `/v1/orgs/{org}/projects/{project}/contracts...`, `/v1/audit`. Search across
 contracts is derived client-side from the list endpoints (the registry's
-`/v1/search` endpoint is a CLI affordance, not used here).
+`/v1/search` endpoint is a CLI affordance, not used here). Audit reads pass a
+`limit` filter (see `AuditFilters` in `src/lib/types.ts`): the service clamps
+it server-side, applies its own default of 100 when the filter is absent, and
+returns entries newest → oldest; the console reads at most `AUDIT_FETCH_LIMIT`
+(500) newest entries per render.
+
+## Deployment boundary
+
+In live mode the console holds a **server-side admin-role `REGISTRY_TOKEN`
+(registry admin, not infra admin)** — that is the credential behind every
+page, including `/v1/audit`. The Next.js server keeps the token out of the
+browser bundle, but the app itself has **no user authentication**: anyone who
+can reach the console's HTTP port can browse every org/project the deployment
+declares, and the console performs the token-authenticated registry reads on
+their behalf.
+
+Therefore, when running live (especially with an admin token), one of the
+following is **required**:
+
+- run the console on a network-isolated segment (private network, VPN,
+  cluster-internal ingress only), or
+- put an authenticating reverse proxy / identity-aware gateway (SSO, mTLS,
+  bastion) in front of it.
+
+The security headers set in `next.config.ts` (no framing, `nosniff`, strict
+referrer, no powerful browser features, no `X-Powered-By`) harden the browser
+surface; they do not authenticate viewers. Demo mode carries no registry
+credential and no real data, so the boundary applies to live deployments only.
 
 ## Routes
 
@@ -71,7 +99,7 @@ contracts is derived client-side from the list endpoints (the registry's
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `NEXT_PUBLIC_DEMO_MODE` | `true` | Render seeded demo data instead of calling the registry. Only the exact values `false` / `0` enable live mode; any other value keeps demo mode on and logs a warning (booleans are not loosely coerced — `FALSE` does **not** go live) |
+| `NEXT_PUBLIC_DEMO_MODE` | unset → **demo in `next dev`, live in production builds** | Renders seeded demo data instead of calling the registry. Exact behavior (see `isDemoMode` in `src/lib/registry-client.ts`): unset or empty keeps the mode-dependent default — **demo under `next dev`, LIVE when `NODE_ENV=production`** (a production build never serves fabricated data just because an env var was forgotten). Exactly `false` / `0` forces live; exactly `true` / `1` forces demo. Any other value logs a warning and keeps the mode-dependent default — booleans are never coerced loosely (`FALSE` does **not** go live). |
 | `NEXT_PUBLIC_REGISTRY_URL` | `http://localhost:4350` | Registry service base URL (live mode) — matches the service's default port |
 | `REGISTRY_TOKEN` | — | **Server-side** bearer token for live mode (admin role for the audit page). Required; never sent to the browser |
 | `REGISTRY_ORGS` | — | Org/project discovery for live mode, e.g. `acme:payments,acme:commerce`. Required — the service exposes no cross-tenant listing by design |

@@ -10,6 +10,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { ClassificationBadge } from '@/components/classification-badge';
+import { EmptyState } from '@/components/empty-state';
 import { LanguageBadges } from '@/components/language-badges';
 import { StatCard } from '@/components/stat-card';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +25,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/format';
+import { auditHref, contractDiffHref, contractHref } from '@/lib/hrefs';
 import { getRegistryClient } from '@/lib/registry-client';
 import type { Classification } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -131,14 +133,19 @@ export default async function OverviewPage() {
                   : 'no publishes recorded'}
               </CardDescription>
             </div>
-            <Link
-              href="/audit?action=publish"
-              className={buttonVariants({ variant: 'ghost', size: 'sm' })}
-            >
+            <Link href={auditHref('publish')} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
               View audit
             </Link>
           </CardHeader>
           <CardContent>
+            {data.recentPublishes.length === 0 ? (
+              <EmptyState
+                icon={GitCommitVertical}
+                title="No publishes recorded"
+                description="Publish a contract with `bridge publish` and it will appear here. The audit log keeps every attempt."
+                className="border-none bg-transparent px-2 py-10"
+              />
+            ) : (
             <Table>
               <caption className="sr-only">
                 Most recently published contract versions, with publisher and languages
@@ -157,7 +164,7 @@ export default async function OverviewPage() {
                   <TableRow key={`${p.org}/${p.project}/${p.base}/${p.version}`}>
                     <TableCell>
                       <Link
-                        href={`/contracts/${encodeURIComponent(p.org)}/${encodeURIComponent(p.project)}/${encodeURIComponent(p.base)}`}
+                        href={contractHref(p.org, p.project, p.base)}
                         className="font-mono text-[13px] text-foreground hover:text-primary"
                       >
                         {p.base}
@@ -186,6 +193,7 @@ export default async function OverviewPage() {
                 ))}
               </TableBody>
             </Table>
+            )}
           </CardContent>
         </Card>
 
@@ -210,7 +218,7 @@ export default async function OverviewPage() {
             {data.recentBreaking.map((r) => (
               <Link
                 key={`${r.contract}-${r.from}-${r.to}`}
-                href={`/contracts/${encodeURIComponent(r.org)}/${encodeURIComponent(r.project)}/${encodeURIComponent(r.contract)}/diff?from=${encodeURIComponent(r.from)}&to=${encodeURIComponent(r.to)}`}
+                href={contractDiffHref(r.org, r.project, r.contract, r.from, r.to)}
                 className="group rounded-md border border-border bg-secondary/30 p-3 transition-colors hover:border-primary/40 hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div className="flex items-center justify-between gap-2">

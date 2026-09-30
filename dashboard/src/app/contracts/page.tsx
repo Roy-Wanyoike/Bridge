@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatDate } from '@/lib/format';
+import { contractHref } from '@/lib/hrefs';
 import { getRegistryClient } from '@/lib/registry-client';
 import type { ContractSummary } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -188,7 +189,7 @@ export default async function ContractsPage({ searchParams }: { searchParams: Se
                 <TableRow key={`${c.org}/${c.project}/${c.base}`}>
                   <TableCell className="max-w-72">
                     <Link
-                      href={`/contracts/${c.org}/${c.project}/${c.base}`}
+                      href={contractHref(c.org, c.project, c.base)}
                       className="font-mono text-[13px] font-medium text-foreground hover:text-primary"
                     >
                       {c.base}

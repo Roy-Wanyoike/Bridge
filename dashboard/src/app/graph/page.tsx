@@ -12,6 +12,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { getRegistryClient } from '@/lib/registry-client';
+import { contractHref, graphHref } from '@/lib/hrefs';
+import { EmptyState } from '@/components/empty-state';
 import { cn } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
@@ -28,13 +30,12 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
   const sp = await searchParams;
   const org = sp.org ?? '';
   const client = getRegistryClient();
-  // Graph, full contract list and org tabs are independent — one batched
-  // round instead of a serial cascade.
-  const [graph, contracts, orgs] = await Promise.all([
-    client.getGraph(org || undefined),
-    client.listAllContracts(),
-    client.listOrgs(),
-  ]);
+  // The contract walk and org tabs are independent — one batched round.
+  // The graph used to be fetched alongside a SECOND full contract walk
+  // (getGraph re-listed everything internally); it now receives the list
+  // already in hand, halving the page's registry traffic (issue #122).
+  const [contracts, orgs] = await Promise.all([client.listAllContracts(), client.listOrgs()]);
+  const graph = await client.getGraph(org || undefined, contracts);
   // Key by the fully-qualified storage key — duplicate bases across orgs
   // must not collide.
   const byBase = new Map(contracts.map((c) => [`${c.org}/${c.project}/${c.base}`, c]));
@@ -58,7 +59,7 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
             (tab) => (
               <Link
                 key={tab.key}
-                href={tab.key ? `/graph?org=${encodeURIComponent(tab.key)}` : '/graph'}
+                href={graphHref(tab.key || undefined)}
                 aria-current={org === tab.key ? 'page' : undefined}
                 className={cn(
                   'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
@@ -111,7 +112,7 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
                     <TableRow key={`${c.org}/${c.project}/${c.base}`}>
                       <TableCell>
                         <Link
-                          href={`/contracts/${encodeURIComponent(c.org)}/${encodeURIComponent(c.project)}/${encodeURIComponent(c.base)}`}
+                          href={contractHref(c.org, c.project, c.base)}
                           className="font-mono text-[13px] hover:text-primary"
                         >
                           {c.base}
@@ -139,6 +140,14 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
             <CardDescription>Every contract appearing in the graph above.</CardDescription>
           </CardHeader>
           <CardContent className="max-h-96 overflow-y-auto">
+            {graph.nodes.length === 0 ? (
+              <EmptyState
+                icon={Waypoints}
+                title="No nodes in this scope"
+                description="No contracts are published in this org yet. The census fills in as contracts are published."
+                className="border-none bg-transparent py-8"
+              />
+            ) : (
             <Table>
               <caption className="sr-only">
                 Every contract appearing in the dependency graph, with consumer count and verdict
@@ -156,7 +165,7 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
                   <TableRow key={n.id}>
                     <TableCell>
                       <Link
-                        href={`/contracts/${encodeURIComponent(n.org)}/${encodeURIComponent(n.project)}/${encodeURIComponent(n.base)}`}
+                        href={contractHref(n.org, n.project, n.base)}
                         className="font-mono text-[13px] hover:text-primary"
                       >
                         {n.base}
@@ -173,6 +182,7 @@ export default async function GraphPage({ searchParams }: { searchParams: SP }) 
                 ))}
               </TableBody>
             </Table>
+            )}
           </CardContent>
         </Card>
       </div>

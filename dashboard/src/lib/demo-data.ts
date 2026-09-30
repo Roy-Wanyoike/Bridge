@@ -1194,7 +1194,14 @@ export function demoListAudit(filters?: {
   actor?: string;
   contract?: string;
   org?: string;
+  limit?: number;
 }): AuditEntry[] {
+  // AUDIT_ENTRIES is newest → oldest, matching the live service's query
+  // contract. The `limit` cap mirrors the service too: clamp into
+  // [0, 10000], default 100 when absent (see applyAuditFilter).
+  const raw = filters?.limit;
+  const limit =
+    raw !== undefined && Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 0), 10_000) : 100;
   return AUDIT_ENTRIES.filter((e) => {
     if (filters?.action && e.action !== filters.action) return false;
     if (filters?.actor && e.actor !== filters.actor) return false;
@@ -1204,7 +1211,7 @@ export function demoListAudit(filters?: {
       if (!e.contract.toLowerCase().includes(q)) return false;
     }
     return true;
-  });
+  }).slice(0, limit);
 }
 
 export function demoGetOverview(): OverviewData {

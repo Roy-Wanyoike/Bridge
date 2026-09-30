@@ -193,6 +193,15 @@ export async function mapBounded<T, R>(
   return results;
 }
 
+/**
+ * Entry cap for the console's audit reads (issue #122). The overview only
+ * needs recent publish rows and timestamps; the audit page renders a window
+ * over the newest entries. 500 bounds both without unbounded payloads on
+ * long-lived registries — the service clamps `limit` server-side anyway
+ * (default 100, max 10000) and returns entries newest → oldest.
+ */
+export const AUDIT_FETCH_LIMIT = 500;
+
 
 /* ------------------------------------------------------------------ */
 /* Live projections: the service serves raw ContractMeta + per-route    */
@@ -486,24 +495,26 @@ export class RestRegistryClient implements RegistryClient {
 
   async listAllContracts(org?: string): Promise<ContractSummary[]> {
     const orgInfos = org ? [{ org, projects: [] as string[] }] : await this.listOrgs();
-    // Fan out per org, then per (org, project): the org→project→contracts
-    // walk runs in parallel instead of a sequential N+1 cascade.
-    const perOrg = await Promise.all(
-      orgInfos.map(async (o) => {
-        const projectsPath = `/v1/orgs/${enc(o.org)}/projects`;
-        let projects = o.projects ?? [];
-        if (projects.length === 0) {
-          const body = await this.get<Record<string, unknown>>(projectsPath);
-          projects = (pickArray(body, ['projects'], projectsPath) as { project: string }[]).map(
-            (p) => p.project,
-          );
-        }
-        const contractLists = await Promise.all(
-          projects.map((project) => this.listContracts(o.org, project)),
+    // Fan out per org, then per (org, project) — but BOUNDED: mapBounded keeps
+    // at most 8 fetch chains in flight per tier instead of one unbounded
+    // Promise.all each (a wide registry used to open sockets linearly in
+    // projects and hammer the service). Each listContracts call summarizes
+    // through the same 8-wide pool, so worst-case concurrency stays 8 per
+    // tier, not projects × 8.
+    const perOrg = await mapBounded(orgInfos, 8, async (o) => {
+      const projectsPath = `/v1/orgs/${enc(o.org)}/projects`;
+      let projects = o.projects ?? [];
+      if (projects.length === 0) {
+        const body = await this.get<Record<string, unknown>>(projectsPath);
+        projects = (pickArray(body, ['projects'], projectsPath) as { project: string }[]).map(
+          (p) => p.project,
         );
-        return contractLists.flat();
-      }),
-    );
+      }
+      const contractLists = await mapBounded(projects, 8, (project) =>
+        this.listContracts(o.org, project),
+      );
+      return contractLists.flat();
+    });
     return perOrg.flat();
   }
 
@@ -719,8 +730,14 @@ export class RestRegistryClient implements RegistryClient {
    * dependent reported by the service becomes a directed edge
    * consumer → provider.
    */
-  async getGraph(org?: string): Promise<GraphData> {
-    const contracts = await this.listAllContracts(org);
+  async getGraph(org?: string, knownContracts?: ContractSummary[]): Promise<GraphData> {
+    // Dedupe (issue #122): the graph page already holds the full contract
+    // list — its census and most-consumed tables render from it — so it hands
+    // the list in here instead of triggering a second full registry walk per
+    // request. Provided lists are filtered to the requested org; without one,
+    // the client walks the registry itself as before.
+    const all = knownContracts ?? (await this.listAllContracts(org));
+    const contracts = org ? all.filter((c) => c.org === org) : all;
     const nodes: GraphData['nodes'] = contracts.map((c) => ({
       id: `${c.org}/${c.project}/${c.base}`,
       org: c.org,
@@ -757,6 +774,13 @@ export class RestRegistryClient implements RegistryClient {
     if (filters?.actor) qs.set('actor', filters.actor);
     if (filters?.contract) qs.set('contract', filters.contract);
     if (filters?.org) qs.set('org', filters.org);
+    // The service clamps `limit` into [0, 10000] and applies its own default
+    // (100) when the param is absent; forwarding it lets callers bound the
+    // payload explicitly (AUDIT_FETCH_LIMIT) instead of relying on that
+    // implicit default.
+    if (filters?.limit !== undefined && Number.isFinite(filters.limit)) {
+      qs.set('limit', String(Math.max(0, Math.trunc(filters.limit))));
+    }
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     const path = `/v1/audit${suffix}`;
     const body = await this.get<Record<string, unknown>>(path);
@@ -779,11 +803,13 @@ export class RestRegistryClient implements RegistryClient {
   }
 
   async getOverview(): Promise<OverviewData> {
-    // Independent sources fetched concurrently, not back-to-back.
+    // Independent sources fetched concurrently, not back-to-back. The audit
+    // read is capped (AUDIT_FETCH_LIMIT): the overview renders only the 8
+    // most recent publishes and joins their timestamps from the trail.
     const [contracts, orgs, audit] = await Promise.all([
       this.listAllContracts(),
       this.listOrgs(),
-      this.listAudit(),
+      this.listAudit({ limit: AUDIT_FETCH_LIMIT }),
     ]);
     const publishes = audit.filter((e) => e.action === 'publish');
     // Publish timestamps come from the audit trail already loaded above — a
@@ -920,7 +946,11 @@ export class DemoRegistryClient implements RegistryClient {
   ): Promise<DiffReport | null> {
     return Promise.resolve(demoGetDiff(org, project, base, from, to));
   }
-  getGraph(org?: string): Promise<GraphData> {
+  getGraph(org?: string, knownContracts?: ContractSummary[]): Promise<GraphData> {
+    // `knownContracts` is a live-mode affordance (dedupe the graph page's
+    // second walk); the demo provider derives everything from its seed, so
+    // the argument is intentionally ignored here.
+    void knownContracts;
     return Promise.resolve(demoGetGraph(org));
   }
   listAudit(filters?: AuditFilters): Promise<AuditEntry[]> {

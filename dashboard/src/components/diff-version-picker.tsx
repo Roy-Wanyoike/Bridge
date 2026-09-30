@@ -12,6 +12,10 @@ import { Select } from '@/components/ui/input';
  * the registry's storage order via a stable sort. Selecting navigates to
  * the same page with updated query params (server-rendered). Options that
  * would produce an inverted or empty diff (from >= to) are disabled.
+ *
+ * `basePath` must be a pre-encoded path prefix (build it with
+ * `contractHref(org, project, base)`); the from/to query params are encoded
+ * here.
  */
 export function DiffVersionPicker({
   basePath,
