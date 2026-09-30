@@ -135,14 +135,155 @@ service Money {
     Get(Money) -> Money
 }
 `);
-  // Types and events/services live in separate top-level namespaces; the
-  // two type declarations collide, and the two services collide.
+  // Types, events and services share one namespace: the second `type Money`
+  // and the second `service Money` are within-kind duplicates, while the
+  // event and the first service collide with earlier kinds (BR2002). Each
+  // offending declaration is reported exactly once — no duplicate noise.
   const dups = diags.filter((d) => d.code === SEMANTIC_CODES.duplicateDeclaration);
   assert.deepEqual(dups.map((d) => d.message), [
     'Duplicate type name `Money`.',
+    'Duplicate event name `Money` — a type with this name already exists.',
+    'Duplicate service name `Money` — a type and an event with this name already exist.',
     'Duplicate service name `Money`.',
   ]);
   assert.equal(dups[0]?.line, 6);
+  assert.equal(diags.length, dups.length, 'no other diagnostics expected');
+});
+
+test('a type and an event may not share a name (cross-kind BR2002)', () => {
+  const diags = analyze(`
+package p
+type Money {
+    amount: int64
+}
+event Money {
+    at: timestamp
+}
+`);
+  assert.equal(diags.length, 1);
+  const dup = diags[0]!;
+  assert.equal(dup.code, SEMANTIC_CODES.duplicateDeclaration);
+  assert.equal(dup.severity, 'error');
+  assert.equal(dup.file, 'test.bridge');
+  assert.equal(dup.message, 'Duplicate event name `Money` — a type with this name already exists.');
+  assert.equal(dup.line, 6);
+  assert.equal(dup.column, 1);
+  assert.equal(dup.hint, 'Rename one of the declarations — type, event and service names share one namespace within a package.');
+});
+
+test('a type and a service may not share a name (cross-kind BR2002)', () => {
+  const diags = analyze(`
+package p
+type Money {
+    amount: int64
+}
+service Money {
+    Get(Money) -> Money
+}
+`);
+  assert.equal(diags.length, 1);
+  const dup = diags[0]!;
+  assert.equal(dup.code, SEMANTIC_CODES.duplicateDeclaration);
+  assert.equal(dup.severity, 'error');
+  assert.equal(dup.message, 'Duplicate service name `Money` — a type with this name already exists.');
+  assert.equal(dup.line, 6);
+  assert.equal(dup.column, 1);
+});
+
+test('an event and a service may not share a name (cross-kind BR2002)', () => {
+  const diags = analyze(`
+package p
+type MoneyRequest {
+    amount: int64
+}
+event Money {
+    at: timestamp
+}
+service Money {
+    Get(MoneyRequest) -> MoneyRequest
+}
+`);
+  assert.equal(diags.length, 1);
+  const dup = diags[0]!;
+  assert.equal(dup.code, SEMANTIC_CODES.duplicateDeclaration);
+  assert.equal(dup.severity, 'error');
+  assert.equal(dup.message, 'Duplicate service name `Money` — an event with this name already exists.');
+  assert.equal(dup.line, 9);
+  assert.equal(dup.column, 1);
+});
+
+test('a type/event/service triple collision reports one diagnostic per offending declaration', () => {
+  const diags = analyze(`
+package p
+type MoneyRequest {
+    amount: int64
+}
+type Money {
+    amount: int64
+}
+event Money {
+    at: timestamp
+}
+service Money {
+    Get(MoneyRequest) -> MoneyRequest
+}
+`);
+  assert.equal(diags.length, 2, 'the first declaration is legal; each later reuse is one clean diagnostic');
+  const [eventDup, serviceDup] = diags as [Diagnostic, Diagnostic];
+  assert.equal(eventDup.code, SEMANTIC_CODES.duplicateDeclaration);
+  assert.equal(eventDup.severity, 'error');
+  assert.equal(eventDup.message, 'Duplicate event name `Money` — a type with this name already exists.');
+  assert.equal(eventDup.line, 9);
+  assert.equal(eventDup.column, 1);
+  assert.equal(serviceDup.code, SEMANTIC_CODES.duplicateDeclaration);
+  assert.equal(serviceDup.severity, 'error');
+  assert.equal(serviceDup.message, 'Duplicate service name `Money` — a type and an event with this name already exist.');
+  assert.equal(serviceDup.line, 12);
+  assert.equal(serviceDup.column, 1);
+});
+
+test('cross-kind messages are deterministic regardless of declaration order', () => {
+  // Same three-way collision, but with event first and service second: the
+  // service's message must still list the kinds in the fixed type→event
+  // order, and the type's message must name the event.
+  const diags = analyze(`
+package p
+event Money {
+    at: timestamp
+}
+service Money {
+    Get(Ping) -> Ping
+}
+type Money {
+    amount: int64
+}
+type Ping {
+    value: string
+}
+`);
+  assert.deepEqual(diags.map((d) => d.message), [
+    'Duplicate service name `Money` — an event with this name already exists.',
+    'Duplicate type name `Money` — an event and a service with this name already exist.',
+  ]);
+});
+
+test('unique names across types, events and services compile clean', () => {
+  const source = `
+package payments.v1
+type Money {
+    amount: int64
+}
+event MoneyCaptured {
+    at: timestamp
+}
+service Payments {
+    Capture(Money) -> Money
+}
+`;
+  assert.deepEqual(analyze(source), [], 'unique names across kinds produce zero diagnostics');
+  const result = compileSource(source, 'clean.bridge');
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+  assert.deepEqual(result.diagnostics, []);
 });
 
 test('duplicate field names in struct, union and event bodies', () => {
