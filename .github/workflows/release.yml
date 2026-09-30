@@ -2,7 +2,9 @@ name: Release
 
 # Triggered by pushing a semver tag (v<major>.<minor>.<patch>):
 #   1. guard       — asserts version lockstep (tag == root package.json == every
-#                    workspace package == Homebrew formula); fails on drift
+#                    workspace package == the CLI's CLI_VERSION == Homebrew
+#                    formula); fails on drift; also fails while the Homebrew
+#                    formula still carries a `sha256 :no_check` placeholder
 #   2. binaries    — builds self-contained CLI binaries for 5 platform targets,
 #                    smoke-tests the native ones honestly (no `|| true`)
 #   3. checksums   — SHA-256 checksums, SPDX SBOM, keyless blob signing + SBOM
@@ -72,10 +74,31 @@ jobs:
             fail=1
           fi
 
+          # Same CLI_VERSION check scripts/release-rehearsal.sh performs: the
+          # binaries print this constant as their version, so it must match
+          # the tag too. `|| true` keeps a missing line from killing the step
+          # via `set -e` — the empty value fails the comparison below instead.
+          cli_version="$(grep -o "CLI_VERSION = '[^']*'" packages/bridge-cli/src/meta.ts | cut -d"'" -f2 || true)"
+          if [ "$cli_version" != "$VERSION" ]; then
+            echo "::error::packages/bridge-cli/src/meta.ts CLI_VERSION is ${cli_version:-<unset>}, but the tag is ${VERSION}. Bump CLI_VERSION as part of the release checklist (RELEASE.md) before tagging."
+            fail=1
+          fi
+
           if [ "$fail" -ne 0 ]; then
             echo "::error::Version drift detected — release aborted, see the ::error:: lines above."
           fi
           exit "$fail"
+
+      # `sha256 :no_check` makes brew install unverified binaries. The
+      # formula only ships once the release checklist has pinned the real
+      # per-target digests (from the release's checksums-sha256.txt), so
+      # refuse to run the release while any placeholder remains.
+      - name: Refuse to ship a formula with sha256 :no_check
+        run: |
+          if grep -n 'sha256[[:space:]]*:no_check' homebrew/bridge.rb; then
+            echo "::error::homebrew/bridge.rb still contains 'sha256 :no_check' — pin the real per-target digests from the release's checksums-sha256.txt (RELEASE.md checklist step 3) before tagging."
+            exit 1
+          fi
 
   binaries:
     name: Binaries (${{ matrix.os-label }})
@@ -93,9 +116,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned so release binaries are reproducible (no other bun version
+      # reference existed in the repo to stay in sync with — bump here
+      # deliberately, together with scripts/package-release.mjs consumers).
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.2.23
 
       - uses: actions/setup-node@v4
         with:
@@ -376,12 +402,36 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run build
 
+      # Single source of truth for what gets published: every workspace
+      # package whose manifest is not `private: true` (directory names under
+      # packages/). Both the dist/ check and the publish loop below consume
+      # this list, so a newly non-private package is picked up and a
+      # privatised one drops out automatically — no hardcoded names to drift.
+      - name: Derive the publish list from the workspace manifests
+        id: publish-list
+        run: |
+          list=""
+          for f in packages/*/package.json; do
+            if [ "$(node -p "require('./$f').private === true")" = "true" ]; then
+              echo "skipping private package: $f"
+              continue
+            fi
+            list="$list $(basename "$(dirname "$f")")"
+          done
+          list="${list# }"
+          if [ -z "$list" ]; then
+            echo "::error::No publishable packages found under packages/*/package.json"
+            exit 1
+          fi
+          echo "packages=$list" >> "$GITHUB_OUTPUT"
+          echo "Publish list: $list"
+
       # Root build script completeness is fixed via PR #54; this assertion is
       # the guard that refuses to ship empty tarballs regardless.
       - name: Verify every published package has a dist/
         run: |
           fail=0
-          for pkg in bridge-core bridge-generators bridge-compat bridge-registry bridge-serialization bridge-cli; do
+          for pkg in ${{ steps.publish-list.outputs.packages }}; do
             if [ ! -d "packages/$pkg/dist" ]; then
               echo "::error::packages/$pkg/dist is missing after 'npm run build' — refusing to publish an empty tarball."
               fail=1
@@ -401,7 +451,7 @@ jobs:
             # Preflight: fail loudly on a missing/expired/unauthorized token.
             npm whoami
           fi
-          for pkg in bridge-core bridge-generators bridge-compat bridge-registry bridge-serialization bridge-cli; do
+          for pkg in ${{ steps.publish-list.outputs.packages }}; do
             echo "== npm publish: packages/$pkg ${DRY_RUN}"
             (cd "packages/$pkg" && npm publish --access public $DRY_RUN)
           done
