@@ -495,8 +495,8 @@ export function makeMinimalIR(): IRPackage {
 }
 
 /**
- * Adversarial package for issue #44: every shape that previously produced
- * compile-breaking output in at least one backend.
+ * Adversarial package for issues #44 and #116: every shape that previously
+ * produced compile-breaking output in at least one backend.
  *
  * - primitive collections (list<int32>, set<boolean>, list<int64>,
  *   set<int32>) — Java fromDict/serialize used to emit List<int>/Set<int>;
@@ -511,7 +511,14 @@ export function makeMinimalIR(): IRPackage {
  * - a service whose method input and output are CROSS-PACKAGE named refs
  *   (opaque in every backend);
  * - an enum-less package (no enum types at all) — wasm lib.rs used to
- *   declare the missing enums module unconditionally.
+ *   declare the missing enums module unconditionally (the Filter enum below
+ *   was added later for the #116 keyword-variant coverage, so this package
+ *   is no longer strictly enum-less; wasm coverage lives in bridge-ffi);
+ * - #116 auto-escape coverage, which must SUCCEED in every backend with
+ *   the wire name preserved: a field named `class` (Java member/getter
+ *   escape), fields `to_dict`/`validate` (C#/Java/Go generated-method
+ *   collisions), a service method named `func` (Go keyword), and an enum
+ *   variant named `pass` (Python keyword).
  */
 export function makeAdversarialIR(): IRPackage {
   const tags: IRTypeDefinition = {
@@ -580,10 +587,17 @@ export function makeAdversarialIR(): IRPackage {
     ],
   };
 
+  const filter: IRTypeDefinition = {
+    name: 'Filter',
+    kind: 'enum',
+    docs: 'Filter carries the #116 Python-keyword variant coverage (pass).',
+    variants: [{ name: 'ALL' }, { name: 'pass', docs: 'Keyword-named variant: Python member is pass_.' }],
+  };
+
   const holder: IRTypeDefinition = {
     name: 'Holder',
     kind: 'struct',
-    docs: 'Holder fields collide with TS validator locals.',
+    docs: 'Holder fields collide with TS validator locals and generated methods.',
     fields: [
       { name: 'value', type: { kind: 'primitive', primitive: 'string' }, optional: false, constraints: [] },
       { name: 'obj', type: { kind: 'named', name: 'Tags' }, optional: false, constraints: [] },
@@ -595,13 +609,34 @@ export function makeAdversarialIR(): IRPackage {
       },
       { name: 'pick', type: { kind: 'named', name: 'Pick' }, optional: false, constraints: [] },
       { name: 'channel', type: { kind: 'named', name: 'Channel' }, optional: false, constraints: [] },
+      {
+        name: 'class',
+        type: { kind: 'primitive', primitive: 'string' },
+        optional: false,
+        constraints: [],
+        docs: 'Java keyword: member class_ and getter getClass_ (not Object.getClass).',
+      },
+      {
+        name: 'to_dict',
+        type: { kind: 'primitive', primitive: 'string' },
+        optional: false,
+        constraints: [],
+        docs: 'Collides with generated toDict()/to_dict methods before escaping.',
+      },
+      {
+        name: 'validate',
+        type: { kind: 'primitive', primitive: 'string' },
+        optional: false,
+        constraints: [],
+        docs: 'Collides with generated Validate()/validate() methods before escaping.',
+      },
     ],
   };
 
   return {
     name: 'edge.v1',
     imports: ['loyalty.v1'],
-    types: [tags, channel, orderRef, pick, holder],
+    types: [tags, channel, orderRef, pick, filter, holder],
     services: [
       {
         name: 'Profiles',
@@ -612,6 +647,12 @@ export function makeAdversarialIR(): IRPackage {
             input: { kind: 'named', name: 'LoyaltyProfile', package: 'loyalty.v1' },
             output: { kind: 'named', name: 'LoyaltyProfile', package: 'loyalty.v1' },
             docs: 'Cross-package input AND output (opaque aliases).',
+          },
+          {
+            name: 'func',
+            input: { kind: 'named', name: 'LoyaltyProfile', package: 'loyalty.v1' },
+            output: { kind: 'named', name: 'LoyaltyProfile', package: 'loyalty.v1' },
+            docs: 'Go-keyword method name: Go selector is func_, the route stays /Profiles/func.',
           },
         ],
       },

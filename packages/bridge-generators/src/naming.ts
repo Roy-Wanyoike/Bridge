@@ -42,6 +42,17 @@ const GO_KEYWORDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Exported Go method names generated on struct types. Fields and methods
+ * share the selector namespace in Go, so a field whose exported name equals
+ * a generated method (Validate on every struct from validate.go) would
+ * make the emitted accessor and the method declaration collide
+ * ("field and method with the same name"). Escaped with the same
+ * trailing-underscore strategy as the other backends; the JSON tag keeps
+ * the declared wire name.
+ */
+const GO_RESERVED_MEMBERS: ReadonlySet<string> = new Set(['Validate']);
+
+/**
  * Rust keywords that require escaping when used as identifiers.
  * `self`, `Self`, `super` and `crate` cannot be raw identifiers, so they
  * fall back to the trailing-underscore strategy.
@@ -126,13 +137,15 @@ export function screamingSnakeFromPascal(name: string): string {
  * Each part is expanded independently (`payment_id` -> `PaymentID`).
  */
 export function goExportedName(snake: string): string {
-  return snakeParts(snake)
+  const exported = snakeParts(snake)
     .map((part) => {
       const lower = part.toLowerCase();
       if (GO_INITIALISMS.has(lower)) return lower.toUpperCase();
       return capitalize(part);
     })
     .join('');
+  if (GO_RESERVED_MEMBERS.has(exported)) return `${exported}_`;
+  return exported;
 }
 
 /**
@@ -202,6 +215,46 @@ export function pythonFieldName(snake: string): { name: string; wire: string } {
   return { name: snake, wire: snake };
 }
 
+/**
+ * Python enum member name for a declared variant name. Enum members are
+ * emitted verbatim (SCREAMING_SNAKE wire values) except for true keywords
+ * and the reserved member table: a variant named `pass` would otherwise
+ * emit `pass = "pass"` inside the class body, a SyntaxError in the whole
+ * module. The wire value stays the declared name; only the member identifier
+ * gets a trailing underscore.
+ */
+export function pythonEnumMemberName(variant: string): { name: string; wire: string } {
+  if (PYTHON_KEYWORDS.has(variant) || PYTHON_RESERVED_MEMBERS.has(variant)) {
+    return { name: `${variant}_`, wire: variant };
+  }
+  return { name: variant, wire: variant };
+}
+
+/**
+ * Names a union dataclass declares itself (`kind`/`value` fields) plus the
+ * receiver name; a snake-cased variant sharing one would shadow or produce
+ * unusable methods (`def self(...)`).
+ */
+const PYTHON_UNION_RESERVED: ReadonlySet<string> = new Set(['self', 'kind', 'value']);
+
+/**
+ * snake_case classmethod name for a union variant name. Python keywords,
+ * the union's own members and the reserved member table (so a variant named
+ * TO_DICT cannot shadow the union's to_dict) are escaped with a trailing
+ * underscore. Wire kind values are emitted separately and stay original.
+ */
+export function pythonUnionVariantMethod(variantName: string): string {
+  const snake = camelToLowerSnake(variantName);
+  if (
+    PYTHON_KEYWORDS.has(snake) ||
+    PYTHON_UNION_RESERVED.has(snake) ||
+    PYTHON_RESERVED_MEMBERS.has(snake)
+  ) {
+    return `${snake}_`;
+  }
+  return snake;
+}
+
 /** Python identifier validity check (rough, ASCII-oriented). */
 export function isPythonIdentifier(name: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !PYTHON_KEYWORDS.has(name);
@@ -269,18 +322,75 @@ const CSHARP_KEYWORDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Java field name from a snake_case wire name: lowerCamelCase, keyword
- * collisions get a trailing underscore. The wire name stays the declared
- * snake_case name — generated Java writes JSON keys explicitly, mirroring
- * how the Rust generator renames fields and keeps a serde rename.
+ * Names that generated Java *members* must not collide with, beyond true
+ * keywords. Every struct class emits `toDict()`, `fromDict(...)` and
+ * `validate()` methods (and event payloads reuse the same class body), and
+ * `equals`/`hashCode`/`toString` override java.lang.Object. A field sharing
+ * one of these names would emit a duplicate member definition
+ * ("method toDict() is already defined"). Escaped with the same
+ * trailing-underscore mechanism as keywords; the wire name keeps the
+ * declared form because generated Java writes JSON keys explicitly,
+ * mirroring how the Rust generator renames fields and keeps a serde rename.
  */
+export const JAVA_RESERVED_MEMBERS: ReadonlySet<string> = new Set([
+  'toDict',
+  'fromDict',
+  'validate',
+  'equals',
+  'hashCode',
+  'toString',
+]);
+
 export function javaFieldName(snake: string): { name: string; escaped: boolean } {
   const parts = snakeParts(snake);
   if (parts.length === 0) return { name: '_', escaped: false };
   let name = parts[0]!;
   for (let i = 1; i < parts.length; i++) name += capitalize(parts[i]!);
-  if (JAVA_KEYWORDS.has(name)) return { name: `${name}_`, escaped: true };
+  if (JAVA_KEYWORDS.has(name) || JAVA_RESERVED_MEMBERS.has(name)) {
+    return { name: `${name}_`, escaped: true };
+  }
   return { name, escaped: false };
+}
+
+/**
+ * Java PascalCase identifier preserving the lower-casing of remainder
+ * characters (`userID` -> `Userid`, `user_id` -> `UserId`), matching the
+ * getter/accessor derivation in generated classes.
+ */
+export function javaPascal(name: string): string {
+  const parts = name.split(/[_\s]+/).filter((p) => p.length > 0);
+  if (parts.length === 0) return 'Value';
+  let out = '';
+  for (const part of parts) {
+    out += part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+  }
+  return out;
+}
+
+/**
+ * Getter name derived from the (possibly escaped) MEMBER name. Trailing
+ * underscores of escaped members are preserved (`class_` -> `getClass_`),
+ * which keeps the member->getter mapping injective and guarantees an
+ * escaped keyword field can never produce the final `Object.getClass()`
+ * signature. The wire name is untouched (getters are wire-neutral).
+ */
+export function javaGetterName(member: string): string {
+  const stripped = member.replace(/_+$/, '');
+  const underscores = member.slice(stripped.length);
+  return `get${javaPascal(stripped)}${underscores}`;
+}
+
+/**
+ * True when a derived getter name would override `Object.getClass()` or
+ * spell `get<javaKeyword>` (`getInt` from a field named `Int`). Such a
+ * getter either fails to compile (incompatible Object.getClass override)
+ * or produces a bean accessor named after a keyword.
+ */
+export function javaGetterCollidesWithObjectOrKeyword(getter: string): boolean {
+  if (getter === 'getClass') return true;
+  if (!getter.startsWith('get') || getter.length === 3) return false;
+  const stem = getter.slice(3);
+  return JAVA_KEYWORDS.has(stem.charAt(0).toLowerCase() + stem.slice(1));
 }
 
 /** Java identifier that is safe for local declarations (statics, params). */
@@ -290,13 +400,26 @@ export function javaSafeIdent(name: string): string {
 }
 
 /**
- * C# property name from a snake_case wire name (PascalCase). Returns the
- * identifier plus a flag telling whether the declared name had to be
- * changed; the wire name always stays the declared snake_case name.
+ * Method names generated on every C# model class (ToDict/FromDict/Validate;
+ * Equals/GetHashCode override System.Object). A property sharing one of
+ * these names is a duplicate member definition (CS0102). Escaped with the
+ * same trailing-underscore mechanism as keywords; the wire name always
+ * stays the declared snake_case name because ToDict/FromDict write JSON
+ * keys explicitly.
  */
+export const CSHARP_RESERVED_MEMBERS: ReadonlySet<string> = new Set([
+  'ToDict',
+  'FromDict',
+  'Validate',
+  'Equals',
+  'GetHashCode',
+]);
+
 export function csharpPropertyName(snake: string): { name: string; escaped: boolean } {
   const pascal = pascalCase(snake);
-  if (CSHARP_KEYWORDS.has(pascal)) return { name: `${pascal}_`, escaped: true };
+  if (CSHARP_KEYWORDS.has(pascal) || CSHARP_RESERVED_MEMBERS.has(pascal)) {
+    return { name: `${pascal}_`, escaped: true };
+  }
   return { name: pascal, escaped: false };
 }
 
