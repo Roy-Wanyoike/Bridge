@@ -97,14 +97,17 @@ Every target below is generated from the same IR — types, enums, tagged unions
 | C#       | ✅ Shipped | System.Text.Json only; .csproj; structural value equality |
 | WASM     | ✅ Shipped | via `@bridge/ffi` (`wasm32` cdylib + wasm-bindgen types with `fromJson`/`toJson`/`validate` from JS) — not a `bridge generate --language` target |
 
-Every generated language is compile-verified in CI against the runnable
-examples, and every generated package ships a round-trip test. The FFI
-layer additionally carries **service methods** across the boundary —
+Generated Go, Rust, Java and C# are compile-verified in CI against the
+runnable examples (dedicated generator-verify jobs); TypeScript and Python
+output is verified by local scripts (`scripts/verify-ts.sh`,
+`scripts/verify-python.sh`) that are not wired into any CI workflow. Every
+generated package ships a round-trip test. The FFI layer additionally
+carries **service methods** across the boundary —
 see [docs/FFI.md](docs/FFI.md).
 
 ## Status
 
-**Bridge 0.2.1 — the roadmap through Phase 3 is shipped and tested: 711 tests green across nine packages (CLI 122, compat 101, core 154, FFI 11, generators 32, LSP 33, registry 65, registry-service 81, serialization 112), every generated language compile-verified, the Go↔Rust FFI proven end to end on real builds, and the CLI publishes to the registry service over HTTP — with optional ed25519 signing for required-mode services and recorded generated-language metadata that lights up the dashboard's live badges.** See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
+**Bridge 0.2.1 — the roadmap through Phase 3 is shipped and tested: 831 tests green across nine packages (CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112), plus a separate 94-test dashboard suite (`cd dashboard && npm test`), generated Go/Rust/Java/C# compile-verified in CI, the Go↔Rust FFI proven end to end on real builds, and the CLI publishes to the registry service over HTTP — with optional ed25519 signing for required-mode services and recorded generated-language metadata that lights up the dashboard's live badges.** Generators now diagnose per-language identifier collisions instead of emitting non-compiling code, and sets serialize in a canonical, language-independent order — byte-determinism guarantees (see [docs/SERIALIZATION.md](docs/SERIALIZATION.md)). See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
 
 | Area | Status |
 |------|--------|
@@ -113,7 +116,7 @@ see [docs/FFI.md](docs/FFI.md).
 | Canonical formatter (`bridge fmt`) | ✅ Shipped |
 | Compatibility engine (`bridge diff`) | ✅ Shipped |
 | Generators (Go / Rust / TypeScript / Python / Java / C#) | ✅ Shipped |
-| CLI (init/validate/fmt/lint/generate/diff/check/impact/publish/pull/versions/inspect/search/doctor/version) | ✅ Shipped |
+| CLI (init/validate/fmt/lint/generate/diff/check/impact/publish/pull/versions/inspect/search/doctor/version/help) | ✅ Shipped |
 | Local registry (immutable, content-addressed) | ✅ Shipped |
 | Examples + docs + verification scripts | ✅ Shipped |
 | Cross-language serialization round-trip matrix (Go↔Rust↔TS↔Python) | ✅ Shipped |
@@ -125,7 +128,7 @@ see [docs/FFI.md](docs/FFI.md).
 | Registry service (OIDC auth, multi-tenancy, signing, audit, rate limits, in-memory + PostgreSQL) | ✅ Shipped ([#18](https://github.com/Roy-Wanyoike/bridge/issues/18)) |
 | Dashboard (Next.js: contracts, diff reports, dependency graph, audit) | ✅ Shipped ([#20](https://github.com/Roy-Wanyoike/bridge/issues/20)) |
 | FFI (Go ↔ Rust over C ABI) + WASM target | ✅ Shipped ([#22](https://github.com/Roy-Wanyoike/bridge/issues/22)) |
-| Release engineering (binaries, containers, SBOM, signing, npm) | ✅ Pipeline shipped ([#24](https://github.com/Roy-Wanyoike/bridge/issues/24)) — first release not yet cut (CI blocked by an Actions billing issue, see [RELEASE.md](RELEASE.md)) |
+| Release engineering (binaries, containers, SBOM, signing, npm) | ✅ Pipeline shipped ([#24](https://github.com/Roy-Wanyoike/bridge/issues/24)) — first release not yet cut: CI is blocked by a GitHub Actions billing lock ([#127](https://github.com/Roy-Wanyoike/bridge/issues/127), owner action required; see [RELEASE.md](RELEASE.md)) |
 
 ## Quick start
 
@@ -224,7 +227,7 @@ npm run build
 npm test
 ```
 
-Requires Node.js >= 22. The test suite covers all nine packages (711 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets.
+Requires Node.js >= 22. The test suite covers all nine packages (831 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the dashboard has its own suite — `cd dashboard && npm test` (94 tests). The `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets — Go, Rust, Java and C# are also compile-verified in CI, while the TypeScript, Python, FFI and events-rpc scripts are local-only gates.
 
 ## Contributing
 

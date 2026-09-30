@@ -21,24 +21,31 @@ and the workflow's first job (`guard`) fails the release if it was skipped.
 1. Ensure `main` is green and the CHANGELOG reflects the release.
 2. **Version lockstep** (enforced by the `guard` job):
    root `package.json` == every `packages/*/package.json` ==
+   `CLI_VERSION` in `packages/bridge-cli/src/meta.ts` ==
    `homebrew/bridge.rb` `version` == the tag (`vX.Y.Z`).
 3. Bump `homebrew/bridge.rb`: set `version "X.Y.Z"` and, once the release
    binaries exist, replace the four `sha256 :no_check` placeholders with the
    real per-target digests from that release's `checksums-sha256.txt`.
    (No PAT is wired up for auto-committing the formula — this is a manual
-   checklist step, and the guard job asserts the version half of it.)
+   checklist step, and the guard job enforces both halves of it: a formula
+   version that does not match the tag, or any remaining
+   `sha256 :no_check` placeholder, fails the release — `:no_check` would
+   make `brew install` accept unverified binaries.)
 4. Tag and push:
    ```bash
    git tag -a vX.Y.Z -m "Bridge vX.Y.Z"
    git push origin vX.Y.Z
    ```
 5. The workflow then:
-   - **guard**: asserts the version lockstep from step 2 (root, all workspace
-     packages, Homebrew formula vs the tag);
+   - **guard**: asserts the version lockstep from step 2 (root, every
+     workspace package, `CLI_VERSION` in `packages/bridge-cli/src/meta.ts`,
+     Homebrew formula vs the tag) and refuses to ship a formula that still
+     carries a `sha256 :no_check` placeholder;
    - builds **self-contained CLI binaries** for linux/darwin × amd64/arm64
      and windows/amd64 — the workflow inlines `bun build --compile` over
      `@bridge/cli` (scripts/package-release.mjs mirrors the same artifact
-     layout for local runs; the workflow does not invoke it) — and honestly
+     layout for local runs; the workflow does not invoke it; bun is pinned
+     to 1.2.23 so release binaries are reproducible) — and honestly
      smoke-tests the linux-amd64 binary (no `|| true`);
    - writes **SHA-256 checksums** (`checksums-sha256.txt`);
    - produces **SBOMs** (SPDX + CycloneDX) via syft;
@@ -55,9 +62,10 @@ and the workflow's first job (`guard`) fails the release if it was skipped.
      (standard buildx pattern) — verified in-workflow with
      `docker buildx imagetools inspect` asserting both platforms;
    - **signs the immutable manifest digest** (never a mutable tag);
-   - **publishes the npm workspaces** (`@bridge/core`, `@bridge/generators`,
-     `@bridge/compat`, `@bridge/registry`, `@bridge/serialization`,
-     `@bridge/cli`) — after asserting every package's `dist/` exists.
+   - **publishes the npm workspaces** — the publish list is derived from
+     the workspace manifests (`packages/*/package.json`; currently nine
+     public packages), never hardcoded — after asserting every published
+     package's `dist/` exists.
 
 ## Container tags emitted
 
@@ -95,7 +103,8 @@ the command above is valid for any of the three emitted tags (`X.Y.Z`,
 the glob misses). For a public tap: copy the formula into `homebrew-bridge/`
 of your tap. **Bumping the formula `version` + pinning the `sha256` digests
 is part of the per-release checklist above** — the release workflow's guard
-job fails if the formula version does not match the pushed tag.
+job fails if the formula version does not match the pushed tag or if any
+`sha256 :no_check` placeholder remains.
 
 ## Local dry-run (no CI needed)
 

@@ -6,7 +6,7 @@ Legend: 🔲 planned · 🟡 in progress · ✅ done
 
 ## Phase 1 — The compiler era (shipped)
 
-One IDL → one deterministic IR → validated code in four languages, with compatibility checking and an immutable registry. Shipped with 355+ tests across five packages; the full suite now stands at 669+ tests across nine packages.
+One IDL → one deterministic IR → validated code in four languages, with compatibility checking and an immutable registry. Shipped with 355+ tests across five packages; the full suite now stands at 831 tests across nine packages (CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112), plus a separate 94-test dashboard suite (`cd dashboard && npm test`).
 
 | Capability | Status | Notes |
 |------------|--------|-------|
@@ -19,8 +19,8 @@ One IDL → one deterministic IR → validated code in four languages, with comp
 | Go, Rust, TypeScript, Python generators | ✅ | Types, enums, tagged unions, aliases, validators, service clients/traits, event envelopes; byte-deterministic output |
 | CLI (16 commands) | ✅ | `init` `validate` `fmt` `lint` `generate` `diff` `check` `impact` `publish` `pull` `versions` `inspect` `search` `doctor` `version` `help` |
 | Local registry | ✅ | Content-addressed, immutable, tamper detection, `dependents`/`dependencies` graph |
-| Examples + verification scripts + docs | ✅ | Eight runnable examples (seven with verified `demo.mjs` runs; `events-rpc` is verified by `scripts/verify-events-rpc.sh` in CI); generated-code type-check and round-trip verification |
-| CI: build, test matrix, generated-code verification | ✅ | GitHub Actions (Node 22/24 matrix + Go/Rust verify jobs) |
+| Examples + verification scripts + docs | ✅ | Eight runnable examples (seven with verified `demo.mjs` runs; `events-rpc` is verified by `scripts/verify-events-rpc.sh` — a local gate, not wired into any CI workflow); generated-code type-check and round-trip verification (Go/Rust/Java/C# compile-verified in CI; TypeScript and Python via local scripts) |
+| CI: build, test matrix, generated-code verification | ✅ | GitHub Actions: Node 22/24 build+test matrix (with a docs-facts check), Go/Rust/Java/C# generator-verify jobs, cross-language serialization matrix, registry-service PostgreSQL integration job, dashboard lint/typecheck/build/test. The workflow definition is valid — runs are currently blocked by the Actions billing lock ([#127](https://github.com/Roy-Wanyoike/bridge/issues/127)); local gates are the validation of record until then |
 
 ## Phase 2 — The governance era (shipped)
 

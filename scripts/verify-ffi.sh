@@ -5,18 +5,19 @@
 # cdylib, then runs the Go cgo client's tests AGAINST the built library —
 # proving the buffer protocol, ownership rules, error plumbing and
 # per-method dispatch over the C ABI on this machine. Skips gracefully
-# when Go/Rust are missing (CI covers it).
+# when Go/Rust are missing. NOTE: this gate is local-only — it is not
+# wired into any CI workflow (see docs/TESTING.md).
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 if ! command -v go >/dev/null 2>&1; then
-  echo "go toolchain not available — skipping (CI covers this)"
+  echo "go toolchain not available — skipping (local-only gate; not wired into CI)"
   exit 0
 fi
 if ! command -v cargo >/dev/null 2>&1; then
-  echo "rust toolchain not available — skipping (CI covers this)"
+  echo "rust toolchain not available — skipping (local-only gate; not wired into CI)"
   exit 0
 fi
 
