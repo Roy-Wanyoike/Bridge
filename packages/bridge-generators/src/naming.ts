@@ -169,9 +169,34 @@ export function serdeRenameAllMatches(declared: string): boolean {
   return screamingSnakeFromPascal(rustVariantName(declared)) === declared;
 }
 
+/**
+ * Names that generated Python *members* must not collide with, beyond true
+ * keywords. Struct and event-payload dataclasses emit `to_dict`, `from_dict`
+ * and `validate` methods, and the from_dict decoders use fixed parameter/
+ * local names (`raw_data` for the wire dict, `raw_value` for the per-field
+ * temp, `out` for the to_dict accumulator, `self` for the receiver). A field
+ * sharing one of these names would shadow a generated method (a field named
+ * `validate` makes `m.validate()` raise TypeError: 'str' object is not
+ * callable) or clobber a decoder variable (a field named `data` rewrites the
+ * from_dict parameter, so the next `data.get(...)` raises AttributeError).
+ * Escaped with the same trailing-underscore mechanism as keywords; the wire
+ * name keeps the declared form via the returned `wire` value.
+ */
+export const PYTHON_RESERVED_MEMBERS: ReadonlySet<string> = new Set([
+  'self',
+  'data',
+  'raw',
+  'out',
+  'to_dict',
+  'from_dict',
+  'validate',
+  'raw_data',
+  'raw_value',
+]);
+
 /** Python identifier for a field name, handling keyword collisions. */
 export function pythonFieldName(snake: string): { name: string; wire: string } {
-  if (PYTHON_KEYWORDS.has(snake)) {
+  if (PYTHON_KEYWORDS.has(snake) || PYTHON_RESERVED_MEMBERS.has(snake)) {
     return { name: `${snake}_`, wire: snake };
   }
   return { name: snake, wire: snake };
