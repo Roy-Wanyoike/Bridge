@@ -381,7 +381,60 @@ function validatePackage(v: Validator, value: unknown): boolean {
 
   ok = validateNameDocsList(v, value['services'], '$.services', MAX_METHODS, ['methods'], (item, at) => validateService(v, item, at)) && ok;
   ok = validateNameDocsList(v, value['events'], '$.events', MAX_EVENTS, ['fields'], (item, at) => validateEvent(v, item, at)) && ok;
+  ok = validateCrossCategoryNames(v, value) && ok;
   ok = v.optStr(value['docs'], '$.docs') && ok;
+  return ok;
+}
+
+/**
+ * Cross-category duplicate-name backstop (issue #120 item 9).
+ *
+ * The per-category checks above only see their own arrays (`types` is
+ * sorted+unique; methods/variants are per-definition). But the compiler
+ * treats type, event and service names as ONE namespace (BR2002: generators
+ * emit every declaration into the same scope), so a name reused across
+ * categories produces non-compiling generated code. The publish side must
+ * reject at the HTTP boundary what the compiler would reject at build time.
+ *
+ * Each collision is reported once, naming the offending name AND both
+ * declaration locations. Non-string/empty names are already reported by the
+ * per-item checks and are skipped here. Same-category duplicates of
+ * services/events are a separate (pre-existing) gap and intentionally not
+ * handled by this backstop.
+ */
+function validateCrossCategoryNames(v: Validator, value: Record<string, unknown>): boolean {
+  interface FirstUse {
+    /** Path of the first declaration, e.g. `$.types[0]`. */
+    at: string;
+    /** Category of the first declaration. */
+    category: 'types' | 'services' | 'events';
+  }
+  const firstUse = new Map<string, FirstUse>();
+  let ok = true;
+  const scan = (category: 'types' | 'services' | 'events'): void => {
+    const items = value[category];
+    if (!Array.isArray(items)) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i] as unknown;
+      if (!isPlainObject(item)) continue;
+      const name = item['name'];
+      if (typeof name !== 'string' || name.length === 0) continue;
+      const at = `$.${category}[${i}]`;
+      const seen = firstUse.get(name);
+      if (seen === undefined) {
+        firstUse.set(name, { at, category });
+      } else if (seen.category !== category) {
+        v.fail(
+          `${at}: name '${name}' is already used by a ${seen.category.replace(/s$/, '')} declaration (${seen.at}) — ` +
+            'type, event and service names share one namespace within a package (rename one of them)',
+        );
+        ok = false;
+      }
+    }
+  };
+  scan('types');
+  scan('services');
+  scan('events');
   return ok;
 }
 

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hashPackage } from '@bridge/core';
 import { InMemoryDriver } from '../storage/memory';
-import { PostgresDriver } from '../storage/postgres/driver';
+import { DEFAULT_AUDIT_RETENTION_DAYS, PostgresDriver } from '../storage/postgres/driver';
 import { TokenBucketLimiter } from '../ratelimit';
 import { makeFullIR, makeIR } from './helpers';
 import type { PublishInput } from '../types';
@@ -142,6 +142,17 @@ test('postgres driver: auditRetentionDays is validated eagerly, no connection (i
     /auditRetentionDays/,
   );
   assert.doesNotThrow(() => new PostgresDriver({ dsn: 'postgres://u:p@h/db', auditRetentionDays: 30 }));
+});
+
+test('postgres driver: audit retention defaults ON at 30 days, overridable (issue #120)', () => {
+  assert.equal(DEFAULT_AUDIT_RETENTION_DAYS, 30);
+  // No option → the documented default applies (previously: pruning off).
+  const defaulted = new PostgresDriver({ dsn: 'postgres://u:p@h/db' });
+  assert.equal(defaulted.auditRetentionDays, 30);
+  // An explicit window overrides the default; eager validation is unchanged.
+  const tuned = new PostgresDriver({ dsn: 'postgres://u:p@h/db', auditRetentionDays: 7 });
+  assert.equal(tuned.auditRetentionDays, 7);
+  assert.throws(() => new PostgresDriver({ dsn: 'postgres://u:p@h/db', auditRetentionDays: 0 }), /auditRetentionDays/);
 });
 
 // ------------------------------------------------------------ rate limiter

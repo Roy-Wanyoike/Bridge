@@ -13,7 +13,12 @@
  * `Retry-After` header of the whole seconds until one token is available.
  *
  * The clock is injectable (`now`) so tests can drive refills deterministically.
- * Stale buckets (idle for over an hour) are swept lazily to bound memory.
+ * Stale buckets are swept two ways to bound memory (issue #120): lazily when
+ * a `take` fails past {@link SWEEP_THRESHOLD}, and on a wall-clock timer
+ * every {@link SWEEP_INTERVAL_MS} — lazily-only was not enough, because the
+ * sweep used to run exclusively on FAILED takes, so fresh unique keys (IPv6
+ * spray) allocated buckets that nothing ever visited again. A hard cap
+ * ({@link MAX_BUCKETS}) with oldest-first eviction is the last-resort bound.
  */
 
 import type { RateLimitConfig, RateLimitOptions } from './types';
@@ -36,9 +41,21 @@ const DEFAULTS: Readonly<Record<RateLimitTier, RateLimitConfig>> = {
 };
 
 /** Buckets idle for longer than this are dropped by the sweep. */
-const SWEEP_IDLE_MS = 60 * 60 * 1000;
-/** Sweep threshold (number of tracked buckets) that triggers a sweep. */
+export const SWEEP_IDLE_MS = 60 * 60 * 1000;
+/** Sweep threshold (number of tracked buckets) that triggers a lazy sweep. */
 const SWEEP_THRESHOLD = 10_000;
+/**
+ * Wall-clock interval between background sweeps (issue #120). The timer is
+ * `unref()`-ed so it never keeps a process alive; 60s bounds worst-case
+ * memory growth (≈30 refills/s × unique keys) without meaningful cost.
+ */
+export const SWEEP_INTERVAL_MS = 60_000;
+/**
+ * Hard cap on tracked buckets (issue #120). Reaching it first triggers an
+ * idle sweep; if the cap is still exceeded, the OLDEST buckets (smallest
+ * `lastMs`) are evicted until back under the cap.
+ */
+export const MAX_BUCKETS = 50_000;
 
 interface Bucket {
   tokens: number;
@@ -51,12 +68,23 @@ export class TokenBucketLimiter {
   private readonly enabled: boolean;
   private readonly now: () => number;
   private readonly buckets = new Map<string, Bucket>();
+  private timer: NodeJS.Timeout | undefined;
 
   constructor(options: RateLimitOptions = {}) {
     this.enabled = options.enabled !== false;
     this.now = options.now ?? (() => Date.now());
     this.auth = normalize(options.auth ?? DEFAULTS.auth, DEFAULTS.auth);
     this.publish = normalize(options.publish ?? DEFAULTS.publish, DEFAULTS.publish);
+    // Timer-based sweep (issue #120): buckets are created for every fresh
+    // key that passes a `take`, including keys that never fail, so the old
+    // failed-take-only lazy sweep let IPv6-spray style floods grow the map
+    // unboundedly. Disabled limiters never allocate buckets → no timer.
+    if (this.enabled) {
+      this.timer = setInterval(() => {
+        this.sweepAt(this.now());
+      }, SWEEP_INTERVAL_MS);
+      this.timer.unref();
+    }
   }
 
   /** Configured capacity for a tier (exposed for tests and headers). */
@@ -86,7 +114,9 @@ export class TokenBucketLimiter {
     }
     if (tokens >= 1) {
       tokens -= 1;
+      const grew = bucket === undefined;
       this.buckets.set(key, { tokens, lastMs });
+      if (grew && this.buckets.size > MAX_BUCKETS) this.enforceHardCap(t);
       return {
         ok: true,
         retryAfterSeconds: 0,
@@ -101,12 +131,60 @@ export class TokenBucketLimiter {
     return { ok: false, retryAfterSeconds: retryAfter, limit: cfg.capacity, remaining: 0 };
   }
 
+  /**
+   * Sweep idle buckets now (instead of waiting for the timer or a failed
+   * take). Returns the number of buckets dropped (tests/introspection).
+   */
+  public sweepNow(): number {
+    return this.sweepAt(this.now());
+  }
+
+  /** Buckets currently tracked (tests/introspection). */
+  public get bucketCount(): number {
+    return this.buckets.size;
+  }
+
+  /** Whether a bucket exists for `key` (tests/introspection). */
+  public hasBucket(key: string): boolean {
+    return this.buckets.has(key);
+  }
+
+  /** Stop the background sweep timer (tests; unnecessary for unref-ed timers). */
+  public dispose(): void {
+    if (this.timer !== undefined) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
+
+  /** Drop buckets idle for over an hour, relative to `t`. */
+  private sweepAt(t: number): number {
+    let removed = 0;
+    for (const [key, bucket] of this.buckets) {
+      if (t - bucket.lastMs > SWEEP_IDLE_MS) {
+        this.buckets.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
   /** Drop buckets that have been idle for over an hour (lazy sweep). */
   private maybeSweep(t: number): void {
     if (this.buckets.size < SWEEP_THRESHOLD) return;
-    for (const [key, bucket] of this.buckets) {
-      if (t - bucket.lastMs > SWEEP_IDLE_MS) this.buckets.delete(key);
-    }
+    this.sweepAt(t);
+  }
+
+  /**
+   * Last-resort bound (issue #120): prefer evicting idle buckets, then the
+   * OLDEST live buckets (smallest `lastMs`), until back under the cap.
+   */
+  private enforceHardCap(t: number): void {
+    this.sweepAt(t);
+    if (this.buckets.size <= MAX_BUCKETS) return;
+    const excess = this.buckets.size - MAX_BUCKETS;
+    const byAge = [...this.buckets.entries()].sort((a, b) => a[1].lastMs - b[1].lastMs);
+    for (let i = 0; i < excess; i++) this.buckets.delete(byAge[i]![0]);
   }
 }
 

@@ -92,3 +92,67 @@ test('validateIRPackage: rejects an invalid field type', () => {
   const result = validateIRPackage(ir);
   assert.equal(result.ok, false);
 });
+
+test('validateIRPackage: rejects names shared across type/event/service categories (issue #120)', () => {
+  // type + event collision
+  const typeEvent = makeIR() as Record<string, unknown>;
+  typeEvent['events'] = [
+    {
+      name: 'Money',
+      fields: [
+        { name: 'amount', type: { kind: 'primitive', primitive: 'string' }, optional: false, constraints: [] },
+      ],
+    },
+  ];
+  const te = validateIRPackage(typeEvent);
+  assert.equal(te.ok, false);
+  if (!te.ok) {
+    const hit = te.errors.find(
+      (e) => e.includes("'Money'") && e.includes('$.events[0]') && e.includes('$.types[0]'),
+    );
+    assert.ok(hit !== undefined, `expected a cross-category error naming both sides, got: ${te.errors.join(' | ')}`);
+    assert.match(hit, /share one namespace/);
+  }
+
+  // type + service collision
+  const typeService = makeIR() as Record<string, unknown>;
+  typeService['services'] = [
+    {
+      name: 'Money',
+      methods: [
+        {
+          name: 'Pay',
+          input: { kind: 'primitive', primitive: 'string' },
+          output: { kind: 'primitive', primitive: 'string' },
+        },
+      ],
+    },
+  ];
+  const ts = validateIRPackage(typeService);
+  assert.equal(ts.ok, false);
+  if (!ts.ok) {
+    assert.ok(
+      ts.errors.some((e) => e.includes("'Money'") && e.includes('$.services[0]') && e.includes('$.types[0]')),
+      `expected a cross-category error naming both sides, got: ${ts.errors.join(' | ')}`,
+    );
+  }
+
+  // event + service collision
+  const eventService = makeFullIR() as Record<string, unknown>;
+  (eventService['events'] as Array<Record<string, unknown>>)[0]!['name'] = 'Orders';
+  const es = validateIRPackage(eventService);
+  assert.equal(es.ok, false);
+  if (!es.ok) {
+    assert.ok(
+      es.errors.some((e) => e.includes("'Orders'") && e.includes('$.events[0]') && e.includes('$.services[0]')),
+      `expected a cross-category error naming both sides, got: ${es.errors.join(' | ')}`,
+    );
+  }
+});
+
+test('validateIRPackage: distinct type/event/service names still validate (issue #120)', () => {
+  // makeFullIR: type 'Order', service 'Orders', event 'OrderCreated' — all
+  // distinct, so the namespace backstop must leave it alone.
+  assert.equal(validateIRPackage(makeFullIR()).ok, true);
+  assert.equal(validateIRPackage(makeIR()).ok, true);
+});
