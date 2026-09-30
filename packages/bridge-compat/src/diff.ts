@@ -22,7 +22,11 @@
  *   deprecation added SAFE / removed WARNING.
  * - Enums: value added WARNING, removed BREAKING.
  * - Unions: variant added WARNING, removed BREAKING, type changed BREAKING.
- * - Services: method added SAFE, removed BREAKING, signature change BREAKING.
+ * - Services: added SAFE, removed BREAKING (service-level entries are
+ *   emitted regardless of method count, mirroring the type/event rules;
+ *   per-method entries are additionally emitted for the methods an
+ *   added/removed service carries), method added SAFE, removed BREAKING,
+ *   signature change BREAKING.
  * - Events: added SAFE, removed BREAKING, field-level changes reuse the
  *   field rules nested under `EventName.field` with kind
  *   `event-field-changed`.
@@ -544,7 +548,14 @@ function methodChanges(serviceName: string, oldMethods: readonly IRMethod[], new
   }
 }
 
-/** Diff services matched by name; added/removed services surface as method changes. */
+/**
+ * Diff services matched by name. Service addition/removal is reported as an
+ * explicit envelope-level change — independent of method count, so an empty
+ * service still produces exactly one entry (removal BREAKING, addition SAFE,
+ * mirroring the type/event rules). The per-method entries for the methods an
+ * added/removed service carries are kept for visibility; paths never collide
+ * (envelope path is the bare service name, method paths are `Name.method`).
+ */
 function serviceChanges(oldServices: readonly IRService[], newServices: readonly IRService[], out: Change[]): void {
   const oldByName = indexBy(oldServices, (s) => s.name);
   const newByName = indexBy(newServices, (s) => s.name);
@@ -552,12 +563,14 @@ function serviceChanges(oldServices: readonly IRService[], newServices: readonly
     const oldService = oldByName.get(name);
     const newService = newByName.get(name);
     if (oldService === undefined && newService !== undefined) {
+      out.push(change(name, 'service-added', 'SAFE', `Service added: ${name}`));
       for (const m of newService.methods) {
         out.push(change(`${name}.${m.name}`, 'method-added', 'SAFE', `Method added: ${name}.${m.name}`));
       }
       continue;
     }
     if (oldService !== undefined && newService === undefined) {
+      out.push(change(name, 'service-removed', 'BREAKING', `Service removed: ${name}`));
       for (const m of oldService.methods) {
         out.push(change(`${name}.${m.name}`, 'method-removed', 'BREAKING', `Method removed: ${name}.${m.name}`));
       }
