@@ -95,6 +95,10 @@ function formatFile(file: BridgeFileNode): string {
   if (hasHeader && hasBody) out.push('');
 
   for (const imp of file.imports) {
+    // Docs written above an `import` belong to the import (the parser
+    // attaches them to the node) — print them there so they are preserved
+    // verbatim and never migrate to the next declaration.
+    pushDocs(out, '', imp.docs);
     out.push(`import ${imp.name}`);
   }
   if (file.imports.length > 0 && file.decls.length > 0) out.push('');

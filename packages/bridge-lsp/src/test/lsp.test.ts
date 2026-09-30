@@ -839,24 +839,22 @@ test('a non-BMP emoji shifts columns by exactly TWO UTF-16 units (surrogate pair
   }
 });
 
-test('an emoji where an identifier is expected yields TWO per-unit diagnostics', async () => {
+test('an emoji where an identifier is expected yields exactly ONE diagnostic (full code point)', async () => {
   const client = new TestClient();
   try {
     await client.initialize();
-    // Documented bridge-core behavior: the lexer walks UTF-16 code units, so
-    // `😀` between `M` and `X` produces two BR1001 diagnostics — one per
-    // surrogate half — at LSP characters 6 and 7 of line 1 (bridge columns
-    // 7 and 8).
+    // Documented bridge-core behavior (since the astral-char fix in #114): the
+    // lexer consumes whole code points, so `😀` between `M` and `X` produces
+    // exactly ONE BR1001 diagnostic at LSP character 6 of line 1 (bridge
+    // column 7). Columns still count UTF-16 code units, so the position maps
+    // 1:1 into LSP.
     const text = 'package p.v1\ntype M\ud83d\ude00X struct {\n    a: int64\n}\n';
     client.open(URI, text);
     const params = await client.nextNotification(Methods.PublishDiagnostics);
     const halves = (params.diagnostics as Array<Record<string, unknown>>)
       .filter((d) => d.code === 'BR1001')
       .map((d) => (d.range as { start: { line: number; character: number } }).start);
-    assert.deepEqual(halves, [
-      { line: 1, character: 6 },
-      { line: 1, character: 7 },
-    ]);
+    assert.deepEqual(halves, [{ line: 1, character: 6 }]);
   } finally {
     client.stop();
   }

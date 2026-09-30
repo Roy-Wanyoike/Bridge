@@ -111,8 +111,10 @@ lexer (`packages/bridge-core/src/lexer.ts`) iterates the source with
   later column on the line by exactly 1;
 - `😀` (U+1F600 — 4 UTF-8 bytes, **2** UTF-16 units, a surrogate pair) shifts
   every later column by exactly 2;
-- consequently an emoji in identifier position produces **two** `BR1001`
-  unexpected-character diagnostics — one per surrogate half.
+- consequently an unexpected astral character produces exactly **one** `BR1001`
+  unexpected-character diagnostic, at the character's start column (the lexer
+  consumes whole code points; the old per-surrogate-half double report was
+  fixed in issue #114).
 
 The LSP spec defines `position.character` as a 0-based offset in **UTF-16
 code units** too, so the mapping is exact in both directions:
@@ -167,6 +169,6 @@ that, exercising the server precisely like an editor would).
   errors answer `null` (no edit) rather than a best-effort format.
 - **Windows paths**: `file:///C:/…` URIs are mapped best-effort; v1 targets
   POSIX hosts.
-- **Known upstream quirk** (not a server bug): a non-BMP character in
-  identifier position yields two lexer diagnostics (one per UTF-16 half) —
-  see the position mapping section.
+- **Astral characters**: an unexpected non-BMP character yields exactly one
+  lexer diagnostic (at its start column) — the compiler consumes whole code
+  points; see the position mapping section.

@@ -321,6 +321,56 @@ test('duplicate package statement is a parse error', () => {
   assert.equal(diagnostics[0]?.code, 'BR2007');
 });
 
+// ------------------------------------------------------------ import docs
+
+test('docs above import attach to the import, not the next declaration', () => {
+  const { file, diagnostics } = parseText(`
+package p
+
+/// Docs about the import.
+import identity.v1
+
+/// Docs about the type.
+type T {
+    x: int32
+}
+`);
+  assert.equal(diagnostics.length, 0, JSON.stringify(diagnostics));
+  assert.equal(file.imports[0]?.docs, 'Docs about the import.');
+  const t = structOf(file, 0);
+  assert.equal(t.docs, 'Docs about the type.', 'type docs must not absorb the import docs');
+});
+
+test('docs above the last import at EOF are kept on the import node', () => {
+  const { file, diagnostics } = parseText('package p\n/// Kept.\nimport a.b\n');
+  assert.equal(diagnostics.length, 0, JSON.stringify(diagnostics));
+  assert.equal(file.imports[0]?.docs, 'Kept.', 'docs above an import must not be dropped at EOF');
+  assert.equal(file.decls.length, 0);
+});
+
+test('consecutive imports each keep their own docs', () => {
+  const { file, diagnostics } = parseText(
+    'package p\n/// First.\nimport a.b\n/// Second.\nimport c.d\n',
+  );
+  assert.equal(diagnostics.length, 0, JSON.stringify(diagnostics));
+  assert.deepEqual(
+    file.imports.map((i) => [i.name, i.docs]),
+    [
+      ['a.b', 'First.'],
+      ['c.d', 'Second.'],
+    ],
+  );
+});
+
+test('import docs do not leak into the IR of the following declaration', () => {
+  const result = compileSource(
+    'package p\n/// Import docs.\nimport identity.v1\n/// Type docs.\ntype T {\n    x: int32\n}\n',
+    'docs.bridge',
+  );
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+  assert.equal(result.ir?.types[0]?.docs, 'Type docs.');
+});
+
 // --------------------------------------------------------- error recovery
 
 test('error recovery: missing colon still parses the next field', () => {
@@ -381,6 +431,33 @@ test('lexer errors: unexpected character and unterminated string', () => {
   const codes = [...diagnostics, ...lexErrors].map((d) => d.code);
   assert.ok(codes.includes('BR1001'), 'unexpected character');
   assert.ok(codes.includes('BR1002'), 'unterminated string');
+});
+
+// --------------------------------------------------- @ modifier recovery
+
+test('termination: dangling `@ @ @ :` in a field body terminates with diagnostics', () => {
+  // Regression guard for the removed dead re-skip in parseField: progress
+  // comes from `parseAtModifier` always consuming the `@`, so malformed
+  // modifiers cannot loop forever.
+  const { file, diagnostics } = parseText('package p\ntype T {\n    a: string @ @ @ :\n}\n');
+  assert.ok(diagnostics.length >= 4, JSON.stringify(diagnostics));
+  assert.ok(
+    diagnostics.every((d) => d.code === 'BR1004'),
+    `all diagnostics are syntax errors: ${JSON.stringify(diagnostics)}`,
+  );
+  assert.ok(
+    diagnostics.filter((d) => d.message.includes('Expected a constraint name after `@`')).length === 3,
+    'each dangling `@` is reported once',
+  );
+  const t = structOf(file, 0);
+  assert.deepEqual(t.fields.map((f) => f.name), ['a'], 'the field still parses best-effort');
+});
+
+test('termination: compileSource returns ok:false with diagnostics for `@ @ @ :`', () => {
+  const result = compileSource('package p\ntype T {\n    a: string @ @ @ :\n}\n', 'at.bridge');
+  assert.equal(result.ok, false);
+  assert.equal(result.ir, undefined);
+  assert.ok(result.diagnostics.length >= 1, JSON.stringify(result.diagnostics));
 });
 
 test('constraint arguments: strings, numbers, negatives, identifiers', () => {

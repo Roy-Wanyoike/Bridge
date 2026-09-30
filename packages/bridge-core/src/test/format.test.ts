@@ -97,6 +97,36 @@ service S {
   assert.equal(formatOk(once), source);
 });
 
+// ------------------------------------------------------- docs above imports
+
+test('docs above imports stay above the import, not the next declaration', () => {
+  const source = `package p
+
+/// Docs about the import.
+import identity.v1
+
+/// Docs about the type.
+type T {
+    x: int32
+}
+`;
+  const once = formatOk(source);
+  assert.equal(once, source, 'import docs stay on the import; type docs stay on the type');
+  assert.equal(formatOk(once), source, 'formatting is idempotent');
+});
+
+test('docs above the last import at EOF survive formatting', () => {
+  const output = formatOk('package p\n/// Kept.\nimport a.b\n');
+  assert.equal(output, 'package p\n\n/// Kept.\nimport a.b\n');
+  assert.equal(formatOk(output), output, 'the formatted output is a fixed point');
+});
+
+test('each of several imports keeps its own docs when formatting', () => {
+  const output = formatOk('package p\n/// One.\nimport a.b\n/// Two.\nimport c.d\n');
+  assert.equal(output, 'package p\n\n/// One.\nimport a.b\n/// Two.\nimport c.d\n');
+  assert.equal(formatOk(output), output);
+});
+
 test('optional markers normalize to the `T?` type suffix', () => {
   const output = formatOk('package p\ntype T {\n    a?: string\n    b: string?\n    c?: list<int32>?\n}\n');
   assert.equal(

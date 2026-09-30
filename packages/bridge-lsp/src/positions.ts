@@ -6,17 +6,17 @@
  * `packages/bridge-core/src/lexer.ts` and by compiling crafted inputs):
  *
  *   bridge-core positions are 1-based and counted in **UTF-16 code units**.
- *   The lexer iterates the source with `String.prototype.charAt`, which
- *   indexes UTF-16 code units, and increments its 1-based `column` once per
- *   unit. Concretely (all verified in this repo):
+ *   The lexer advances its 1-based `column` once per UTF-16 unit and consumes
+ *   whole code points when scanning (an astral character is one scan step).
+ *   Concretely (all verified in this repo):
  *
  *   - `é` (U+00E9 — 2 UTF-8 bytes, 1 UTF-16 unit) inside a string literal
  *     shifts every later column on the line by exactly 1;
  *   - `😀` (U+1F600 — 4 UTF-8 bytes, 2 UTF-16 units, one surrogate pair)
  *     shifts every later column by exactly 2;
- *   - consequently an emoji used where an identifier is expected produces
- *     TWO unexpected-character diagnostics (one per surrogate half) at
- *     consecutive columns.
+ *   - consequently an unexpected astral character produces exactly ONE
+ *     unexpected-character diagnostic at the character's start column (the
+ *     per-surrogate-half double report was fixed in issue #114).
  *
  * The LSP 3.17 specification defines `position.character` as a 0-based
  * offset in **UTF-16 code units** as well. The mapping is therefore exact
