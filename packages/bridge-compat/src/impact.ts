@@ -668,12 +668,24 @@ export function computeImpact(options: ImpactOptions): ImpactReport {
       .filter((n) => n !== anchor)
       .sort((a, b) => a.depth - b.depth || compareMeta(a.meta, b.meta));
     const maxRounds = order.length + 1;
+    // Stability must be content-level, not key-level: taint VALUES (the set
+    // of change indices flowing through an already-tainted name) can grow in
+    // a round that adds no new keys. Stopping on key growth alone strands
+    // late-arriving indices — a consumer processed before its source (it
+    // sorts first at equal depth, or sits at a shallower depth) then misses
+    // absorbing a BREAKING change. Per-name index sets only ever grow
+    // (monotone), so equal total element counts imply identical content.
+    const taintElements = (taint: ReadonlyMap<string, ReadonlySet<number>>): number => {
+      let total = 0;
+      for (const indices of taint.values()) total += indices.size;
+      return total;
+    };
     for (let round = 0; round < maxRounds; round++) {
       let grew = false;
       for (const node of order) {
         node.contacts = computeContacts(node, nodes, marks, anchor.name);
         const nextTaint = computeTaint(node, nodes);
-        if (nextTaint.size > node.taint.size) grew = true;
+        if (taintElements(nextTaint) > taintElements(node.taint)) grew = true;
         node.taint = nextTaint;
       }
       if (!grew) break;

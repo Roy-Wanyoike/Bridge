@@ -328,6 +328,152 @@ test('impact: consumer whose IR cannot be pulled is conservatively affected', ()
 });
 
 // ---------------------------------------------------------------------------
+// Taint fixed-point: value-only growth (regressions for GitHub #111)
+// ---------------------------------------------------------------------------
+
+/**
+ * Graph for the two #111 regressions. Every consumer sits at depth 1 and its
+ * name sorts BEFORE the name of the package it reads from, so within one
+ * fixed-point round each consumer is processed before its source and reads
+ * the source's PREVIOUS-round taint. The anchor diff carries two changes:
+ * `St` gains a required field (WARNING — reaches everyone in round 0 through
+ * the anchor's complete marks) and `Tu` loses a field (BREAKING — must hop
+ * zed → slow → mid → aaa, one round per hop, because each hop reads the
+ * previous round). The last hop lands as pure VALUE growth: no taint KEY is
+ * added anywhere in that round, so a key-count termination check stops the
+ * loop early and the top consumer is mis-reported WARNING/through instead of
+ * BREAKING (consumersBreakingAffected under-counts by one).
+ */
+function baseV111(): IRPackage {
+  return {
+    name: 'base.v1',
+    imports: [],
+    types: [struct('St', [field('keep', prim('int32'))]), struct('Tu', [field('old', prim('string'))])],
+    services: [],
+    events: [],
+  };
+}
+
+function baseV111Candidate(): IRPackage {
+  return {
+    name: 'base.v1',
+    imports: [],
+    types: [
+      struct('St', [field('keep', prim('int32')), field('extra', prim('string'))]), // required add → WARNING
+      struct('Tu', []), // 'old' removed → BREAKING
+    ],
+    services: [],
+    events: [],
+  };
+}
+
+function zedV111(): IRPackage {
+  return {
+    name: 'zed.v1',
+    imports: ['base.v1'],
+    types: [struct('Z', [field('p', named('Tu', 'base.v1'))])],
+    services: [],
+    events: [],
+  };
+}
+
+function slowV111(): IRPackage {
+  return {
+    name: 'slow.v1',
+    imports: ['base.v1', 'zed.v1'],
+    types: [struct('J', [field('z', named('Z', 'zed.v1'))])],
+    services: [],
+    events: [],
+  };
+}
+
+function midV111(): IRPackage {
+  return {
+    name: 'mid.v1',
+    imports: ['base.v1', 'slow.v1'],
+    types: [struct('St', [field('s', named('St', 'base.v1')), field('j', named('J', 'slow.v1'))])],
+    services: [],
+    events: [],
+  };
+}
+
+/** Top consumer reading only the intermediate (`mid.v1#St`). */
+function aaaV111(): IRPackage {
+  return {
+    name: 'aaa.v1',
+    imports: ['base.v1', 'mid.v1'],
+    types: [struct('W', [field('w', named('St', 'mid.v1'))])],
+    services: [],
+    events: [],
+  };
+}
+
+/**
+ * Variant top consumer that ALSO references the anchor's `St` directly: its
+ * local taint key exists from round 0 carrying only the WARNING index, and
+ * the BREAKING index must reach it later THROUGH that existing key.
+ */
+function aaaDirectV111(): IRPackage {
+  return {
+    name: 'aaa.v1',
+    imports: ['base.v1', 'mid.v1'],
+    types: [struct('W', [field('direct', named('St', 'base.v1')), field('relay', named('St', 'mid.v1'))])],
+    services: [],
+    events: [],
+  };
+}
+
+function chainV111Entries(aaa: IRPackage = aaaV111()): Entry[] {
+  return [
+    { packageName: 'base.v1', base: 'base', version: 'v1', imports: [], ir: baseV111() },
+    { packageName: 'aaa.v1', base: 'aaa', version: 'v1', imports: ['base.v1', 'mid.v1'], ir: aaa },
+    { packageName: 'mid.v1', base: 'mid', version: 'v1', imports: ['base.v1', 'slow.v1'], ir: midV111() },
+    { packageName: 'slow.v1', base: 'slow', version: 'v1', imports: ['base.v1', 'zed.v1'], ir: slowV111() },
+    { packageName: 'zed.v1', base: 'zed', version: 'v1', imports: ['base.v1'], ir: zedV111() },
+  ];
+}
+
+function analyzeV111(aaa: IRPackage = aaaV111()): ReturnType<typeof computeImpact> {
+  return computeImpact({
+    oldIR: baseV111(),
+    newIR: baseV111Candidate(),
+    registry: fakeRegistry(chainV111Entries(aaa)),
+    labels: { from: 'base.v1@v1', to: 'base.v1@v2' },
+  });
+}
+
+test('impact regression #111: consumer sorting before its source still absorbs the late BREAKING change', () => {
+  const report = analyzeV111();
+  assert.equal(report.changes.length, 2); // St field-added (WARNING) + Tu field-removed (BREAKING)
+  const aaa = byName(report, 'aaa.v1');
+  assert.equal(aaa.severity, 'BREAKING');
+  assert.equal(aaa.reason, 'through');
+  assert.deepEqual(aaa.viaTypes, ['St']);
+  for (const name of ['mid.v1', 'slow.v1', 'zed.v1']) {
+    assert.equal(byName(report, name).severity, 'BREAKING');
+  }
+  assert.equal(report.stats.consumersAffected, 4);
+  assert.equal(report.stats.consumersBreakingAffected, 4);
+  const removal = report.suggestedActions.find((a) => a.kind === 'field-removed');
+  assert.ok(removal !== undefined);
+  assert.equal(removal.classification, 'BREAKING');
+  assert.deepEqual(removal.reaches, ['aaa.v1', 'mid.v1', 'slow.v1', 'zed.v1']);
+});
+
+test('impact regression #111: value-only taint growth reaches through an existing key', () => {
+  const report = analyzeV111(aaaDirectV111());
+  const aaa = byName(report, 'aaa.v1');
+  assert.equal(aaa.severity, 'BREAKING'); // key W existed with the WARNING only; BREAKING arrived later
+  assert.equal(aaa.reason, 'direct-type');
+  assert.deepEqual(aaa.viaTypes, ['St']);
+  assert.equal(report.stats.consumersAffected, 4);
+  assert.equal(report.stats.consumersBreakingAffected, 4);
+  const removal = report.suggestedActions.find((a) => a.kind === 'field-removed');
+  assert.ok(removal !== undefined);
+  assert.ok(removal.reaches.includes('aaa.v1'));
+});
+
+// ---------------------------------------------------------------------------
 // Stats roll-up
 // ---------------------------------------------------------------------------
 
