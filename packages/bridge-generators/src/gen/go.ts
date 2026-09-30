@@ -734,7 +734,10 @@ function goService(service: IRService, input: GeneratorInput): string {
   for (const method of service.methods) {
     const mdoc = goDoc(method.docs, method.deprecated);
     if (mdoc.length > 0) out += `${tab(mdoc)}\n`;
-    out += `\t${method.name}(ctx context.Context, req *${methodTypeName(method.input, input)}) (*${methodTypeName(method.output, input)}, error)\n`;
+    // Method identifiers go through goSafeIdent: a method named like a Go
+    // keyword (func, interface, map, type, ...) would otherwise break the
+    // interface/client/stub. Route strings below keep the raw wire name.
+    out += `\t${goSafeIdent(method.name)}(ctx context.Context, req *${methodTypeName(method.input, input)}) (*${methodTypeName(method.output, input)}, error)\n`;
   }
   out += '}\n\n';
 
@@ -757,7 +760,7 @@ function goService(service: IRService, input: GeneratorInput): string {
     if (mdoc.length > 0) out += `${mdoc}\n`;
     const inType = methodTypeName(method.input, input);
     const outType = methodTypeName(method.output, input);
-    out += `func (c *${service.name}JSONClient) ${method.name}(req *${inType}) (*${outType}, error) {\n`;
+    out += `func (c *${service.name}JSONClient) ${goSafeIdent(method.name)}(req *${inType}) (*${outType}, error) {\n`;
     out += `\tvar out ${outType}\n`;
     out += `\tif err := c.do(${JSON.stringify(method.name)}, req, &out); err != nil {\n`;
     out += '\t\treturn nil, err\n';
@@ -864,7 +867,7 @@ function goServiceHandler(
       out += '\t\t\t\treturn\n';
       out += '\t\t\t}\n';
     }
-    out += `\t\t\tresp, err := server.${method.name}(r.Context(), &req)\n`;
+    out += `\t\t\tresp, err := server.${goSafeIdent(method.name)}(r.Context(), &req)\n`;
     out += '\t\t\tif err != nil {\n';
     out += '\t\t\t\tvar rpcErr *BridgeRPCError\n';
     out += '\t\t\t\tif errors.As(err, &rpcErr) {\n';
@@ -971,7 +974,7 @@ function goStubServer(service: IRService, input: GeneratorInput): string {
   for (const method of service.methods) {
     const inType = methodTypeName(method.input, input);
     const outType = methodTypeName(method.output, input);
-    out += `func (s *stub${service.name}Server) ${method.name}(ctx context.Context, req *${inType}) (*${outType}, error) {\n`;
+    out += `func (s *stub${service.name}Server) ${goSafeIdent(method.name)}(ctx context.Context, req *${inType}) (*${outType}, error) {\n`;
     out += `\t_ = ctx\n`;
     out += `\t_ = req\n`;
     out += `\tvar out ${outType}\n`;
@@ -1035,7 +1038,7 @@ function goRoundtripSuccessTest(
   out += '\tdefer server.Close()\n';
   out += `\tclient := New${service.name}JSONClient(server.Client(), server.URL)\n`;
   out += `\treq := &${inType}{}\n`;
-  out += `\tif _, err := client.${method.name}(req); err != nil {\n`;
+  out += `\tif _, err := client.${goSafeIdent(method.name)}(req); err != nil {\n`;
   out += `\t\tt.Fatalf("${method.name}: %v", err)\n\t}\n`;
   out += '}\n\n';
   return out;

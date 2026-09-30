@@ -52,12 +52,12 @@ import { NUMERIC_PRIMITIVES, isLocalStructRef, renderTypeRef } from '../mappings
 import { crossPackageRefs, sortedEvents, sortedServices, sortedTypes } from '../analysis';
 import { pythonEventsFileV2, pythonServerBlocks } from './python-wire';
 import {
-  PYTHON_KEYWORDS,
-  PYTHON_RESERVED_MEMBERS,
   camelToScreamingSnake,
   camelToLowerSnake,
+  pythonEnumMemberName,
   pythonFieldName,
   pythonModuleName,
+  pythonUnionVariantMethod,
   rustCrateName,
 } from '../naming';
 import type { GeneratedFile, GeneratorInput } from './input';
@@ -284,7 +284,12 @@ function pythonEnumsFile(
     for (const variant of enumType.variants) {
       const vdoc = pythonFieldComment(variant.docs, variant.deprecated);
       if (vdoc !== undefined) lines.push(vdoc);
-      lines.push(`    ${variant.name} = ${JSON.stringify(variant.name)}`);
+      // Member identifiers are keyword-escaped (issue #116 class 5): a
+      // variant named `pass` would emit `pass = "pass"`, a SyntaxError.
+      // The VALUE stays the declared wire name, so parse_<Name> and the
+      // str,Enum wire contract keep the original text.
+      const member = pythonEnumMemberName(variant.name).name;
+      lines.push(`    ${member} = ${JSON.stringify(variant.name)}`);
     }
     lines.push('');
     lines.push('');
@@ -606,7 +611,7 @@ function renderUnion(
     const vdoc = pythonFieldComment(variant.docs, variant.deprecated, 4);
     lines.push('');
     lines.push('    @classmethod');
-    lines.push(`    def ${snakeMethod(variant.name)}(cls, value: ${renderTypeRef(variant.type, input.render)}) -> "${type.name}":`);
+    lines.push(`    def ${pythonUnionVariantMethod(variant.name)}(cls, value: ${renderTypeRef(variant.type, input.render)}) -> "${type.name}":`);
     if (vdoc !== undefined) lines.push(vdoc);
     lines.push(`        return cls(kind=${JSON.stringify(variant.name)}, value=value)`);
   }
@@ -634,30 +639,6 @@ function renderUnion(
   }
   lines.push('        raise ValueError(f"Unknown {type.__name__} kind: {kind!r}")');
   return lines.join('\n');
-}
-
-/**
- * snake_case classmethod name for a union variant name.
- *
- * Variant names collide with the union dataclass's own fields (`kind`,
- * `value`) and with `self` (which would produce unusable `def self(...)`
- * methods), so those lower_snake names get a trailing underscore. Python
- * keywords are escaped the same way.
- */
-const PYTHON_UNION_RESERVED: ReadonlySet<string> = new Set(['self', 'kind', 'value']);
-
-function snakeMethod(variantName: string): string {
-  const snake = camelToLowerSnake(variantName);
-  // PYTHON_RESERVED_MEMBERS is included so a variant named TO_DICT or
-  // FROM_DICT cannot shadow the union's own to_dict/from_dict methods.
-  if (
-    PYTHON_KEYWORDS.has(snake) ||
-    PYTHON_UNION_RESERVED.has(snake) ||
-    PYTHON_RESERVED_MEMBERS.has(snake)
-  ) {
-    return `${snake}_`;
-  }
-  return snake;
 }
 
 /* ------------------------------------------------------------------ */

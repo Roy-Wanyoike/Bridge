@@ -27,6 +27,7 @@ import { generateJava } from './gen/java';
 import { generateCSharp } from './gen/csharp';
 import type { RenderContext, TargetLanguage } from './mappings';
 import { localTypeNames } from './analysis';
+import { assertNoCollisions } from './collisions';
 import type { GenerateOptions } from './options';
 
 export type { TargetLanguage, GeneratedFile } from './gen/input';
@@ -60,6 +61,13 @@ export function generate(ir: IRPackage, options: GenerateOptions): GeneratedFile
       aliasTargets: localAliasTargets(ir),
     } satisfies RenderContext,
   };
+
+  // Issue #116: fail generation with an actionable diagnostic when legal
+  // contract names collapse into one identifier per language (case-variant
+  // fields/variants, user types named like generated runtime symbols).
+  // Auto-escaped member names (reserved members, keywords) are handled in
+  // naming.ts and never reach this.
+  assertNoCollisions(input);
 
   switch (options.language) {
     case 'go':

@@ -67,8 +67,10 @@ import { NUMERIC_PRIMITIVES, STRING_LIKE_PRIMITIVES, boxedJava, isLocalStructRef
 import { crossPackageRefs, sortedEvents, sortedServices, sortedTypes } from '../analysis';
 import {
   javaFieldName,
+  javaGetterName,
   javaPackageName,
   javaPackagePath,
+  javaPascal as pascal,
   javaSafeIdent,
 } from '../naming';
 import type { GeneratedFile, GeneratorInput } from './input';
@@ -150,17 +152,6 @@ function fieldDoc(field: IRField, indent: string): string | undefined {
 /** The Java member name for a field (lowerCamelCase, keyword-escaped). */
 function jf(field: IRField): string {
   return javaFieldName(field.name).name;
-}
-
-/** PascalCase identifier from a snake_case or SCREAMING_SNAKE name. */
-function pascal(name: string): string {
-  const parts = name.split(/[_\s]+/).filter((p) => p.length > 0);
-  if (parts.length === 0) return 'Value';
-  let out = '';
-  for (const part of parts) {
-    out += part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
-  }
-  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1014,9 +1005,12 @@ function structClassBody(
   push('    }');
   push('');
 
-  // Getters
+  // Getters: derived from the ESCAPED member name (issue #116 class 3) so
+  // a field named `class` (member `class_`) yields getClass_ instead of
+  // overriding the final Object.getClass. Trailing underscores of escaped
+  // members are preserved, keeping the member->getter mapping injective.
   for (const field of type.fields) {
-    const getter = `get${pascal(field.name)}`;
+    const getter = javaGetterName(jf(field));
     push(`    public ${fieldJavaType(field, input)} ${getter}() {`);
     push(`        return this.${jf(field)};`);
     push('    }');
@@ -1236,17 +1230,38 @@ function enumFile(
   srcDir: string,
 ): GeneratedFile {
   const lines = typeFilePrologue(input, type, srcDir, [], type.name);
-  for (const [i, variant] of type.variants.entries()) {
+  // Constant identifiers are keyword-escaped (issue #116 class 5): a
+  // variant named like a Java keyword (`class`) cannot be a constant name.
+  // The WIRE value stays the declared name — escaped constants override
+  // wire()/toString() below, because name() would return the escaped
+  // identifier instead of the declared wire text.
+  const constants = type.variants.map((variant) => ({
+    variant,
+    constant: javaSafeIdent(variant.name),
+  }));
+  const hasEscaped = constants.some(({ variant, constant }) => constant !== variant.name);
+  for (const [i, { variant, constant }] of constants.entries()) {
     const vdoc = javaDoc(variant.docs, variant.deprecated, '    ');
     if (vdoc !== undefined) lines.push(vdoc);
-    lines.push(`    ${variant.name}${i < type.variants.length - 1 ? ',' : ';'}`);
+    lines.push(`    ${constant}${i < type.variants.length - 1 ? ',' : ';'}`);
   }
   lines.push('');
   lines.push('    /**');
   lines.push('     * The Bridge wire value for this variant (the declared name).');
   lines.push('     */');
   lines.push('    public String wire() {');
-  lines.push('        return name();');
+  if (hasEscaped) {
+    lines.push('        switch (this) {');
+    for (const { variant, constant } of constants) {
+      if (constant !== variant.name) {
+        lines.push(`            case ${constant}: return ${JSON.stringify(variant.name)};`);
+      }
+    }
+    lines.push('            default: return name();');
+    lines.push('        }');
+  } else {
+    lines.push('        return name();');
+  }
   lines.push('    }');
   lines.push('');
   lines.push('    /**');
@@ -1255,7 +1270,9 @@ function enumFile(
   lines.push('     */');
   lines.push(`    public static ${type.name} fromWire(String value) {`);
   lines.push(`        for (${type.name} variant : values()) {`);
-  lines.push('            if (variant.name().equals(value)) { return variant; }');
+  // Match on the wire value (escaped constants carry an explicit one), so
+  // keyword-named variants round-trip under their declared names.
+  lines.push('            if (variant.wire().equals(value)) { return variant; }');
   lines.push('        }');
   const allowed = type.variants.map((v) => v.name).join(', ');
   lines.push(
@@ -1265,7 +1282,7 @@ function enumFile(
   lines.push('');
   lines.push('    @Override');
   lines.push('    public String toString() {');
-  lines.push('        return name();');
+  lines.push('        return wire();');
   lines.push('    }');
   lines.push('}');
   lines.push('');
@@ -1450,7 +1467,8 @@ function numericLiteral(arg: string): string {
  * isPresent() guard, so this unwraps with .get().
  */
 function constraintAccessor(field: IRField, _className: string, _input: GeneratorInput): string {
-  const base = `value.get${pascal(field.name)}()`;
+  // Getters derive from the escaped member name (issue #116 class 3).
+  const base = `value.${javaGetterName(jf(field))}()`;
   return fieldIsOptional(field) ? `${base}.get()` : base;
 }
 
@@ -1543,7 +1561,8 @@ function bridgeValidationFile(input: GeneratorInput, srcDir: string): GeneratedF
       const nested = javaNestedValidation(field, input);
       checkLines.push(...nested);
       if (checkLines.length === 0) continue;
-      const accessor = `value.get${pascal(field.name)}()`;
+      // Getters derive from the escaped member name (issue #116 class 3).
+      const accessor = `value.${javaGetterName(jf(field))}()`;
       if (fieldIsOptional(field)) {
         lines.push(`        if (${accessor}.isPresent()) {`);
         lines.push(...checkLines);
