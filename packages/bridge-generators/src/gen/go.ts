@@ -10,7 +10,9 @@
  *   api -> API, url -> URL, ...); json tags keep the snake_case wire names.
  *   Optional fields are pointers with `json:"...,omitempty"`.
  * - `set<T>` becomes `Set[T]` — a generic `map[T]struct{}` wrapper whose
- *   MarshalJSON/UnmarshalJSON speak the JSON-array wire format, with
+ *   MarshalJSON/UnmarshalJSON speak the JSON-array wire format in the
+ *   canonical set order (numbers numeric, strings by UTF-8 byte order /
+ *   code points, false < true — identical in all six targets, #117), with
  *   SetToSlice/SliceToSet converters.
  * - Required-field presence is NOT enforced at runtime by Go Validate:
  *   JSON zero values are indistinguishable from missing fields for
@@ -211,6 +213,7 @@ function goTypesFile(input: GeneratorInput): GeneratedFile | undefined {
   if (opaque.length > 0 || hasUnions || hasSets) imports.add('encoding/json');
   if (hasUnions || hasSets) imports.add('fmt');
   if (hasSets) imports.add('sort');
+  if (hasSets) imports.add('reflect');
 
   const parts = [fileHeader('go', input.packageName), '', goPackageClause(input.packageName)];
   const importBlock = imports.block();
@@ -289,14 +292,14 @@ function goSetSupport(): string {
   let out = '';
   out += `${goDoc('Set is a set of comparable items. On the JSON wire it is an array.')}\n`;
   out += 'type Set[T comparable] map[T]struct{}\n\n';
-  out += `${goDoc('MarshalJSON encodes the set as a JSON array in deterministic (stringified) key order.')}\n`;
+  out += `${goDoc('MarshalJSON encodes the set as a JSON array in the canonical Bridge set order.')}\n`;
   out += 'func (s Set[T]) MarshalJSON() ([]byte, error) {\n';
   out += '\titems := make([]T, 0, len(s))\n';
   out += '\tfor item := range s {\n';
   out += '\t\titems = append(items, item)\n';
   out += '\t}\n';
   out += '\tsort.Slice(items, func(i, j int) bool {\n';
-  out += '\t\treturn fmt.Sprint(items[i]) < fmt.Sprint(items[j])\n';
+  out += '\t\treturn bridgeSetLess(items[i], items[j])\n';
   out += '\t})\n';
   out += '\treturn json.Marshal(items)\n';
   out += '}\n\n';
@@ -332,6 +335,36 @@ function goSetSupport(): string {
   out += '\t\tout[item] = struct{}{}\n';
   out += '\t}\n';
   out += '\treturn out\n';
+  out += '}\n\n';
+  out += `${goDoc(
+    [
+      'bridgeSetLess reports whether a sorts before b in the canonical Bridge',
+      'set order: numbers ascending numerically, strings ascending by UTF-8',
+      'byte order (Unicode code points), false before true. Bridge sets are',
+      'homogeneous, so the dynamic check always takes the same branch for a',
+      'given set; every Bridge target language implements the same rule',
+      '(docs/SERIALIZATION.md, canonical rule 5).',
+    ].join('\n'),
+  )}\n`;
+  out += 'func bridgeSetLess(a, b any) bool {\n';
+  out += '\tav := reflect.ValueOf(a)\n';
+  out += '\tbv := reflect.ValueOf(b)\n';
+  out += '\tswitch av.Kind() {\n';
+  out += '\tcase reflect.String:\n';
+  out += '\t\treturn av.String() < bv.String()\n';
+  out += '\tcase reflect.Bool:\n';
+  out += '\t\treturn !av.Bool() && bv.Bool()\n';
+  out += '\tcase reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:\n';
+  out += '\t\treturn av.Int() < bv.Int()\n';
+  out += '\tcase reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:\n';
+  out += '\t\treturn av.Uint() < bv.Uint()\n';
+  out += '\tcase reflect.Float32, reflect.Float64:\n';
+  out += '\t\treturn av.Float() < bv.Float()\n';
+  out += '\tdefault:\n';
+  out += '\t\t// Unreachable for Bridge set elements (primitives only); keeps the\n';
+  out += '\t\t// previous deterministic ordering for any exotic user generic.\n';
+  out += '\t\treturn fmt.Sprint(a) < fmt.Sprint(b)\n';
+  out += '\t}\n';
   out += '}\n\n';
   return out;
 }

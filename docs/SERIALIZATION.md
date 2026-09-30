@@ -65,8 +65,11 @@ generators map Bridge types onto these same semantics.
    by all formats and languages).
 4. **Undefined/absent** — map entries whose value is `undefined` are dropped
    (absent optional). Explicit `null` is preserved.
-5. **Sets** — encoded as sorted, deduped arrays. Decoders return a plain
-   array; set-typed fields re-apply sorting/dedup at the model layer.
+5. **Sets** — encoded as sorted, deduped arrays (numbers numerically,
+   strings by UTF-8 byte order = code-point order, `false` < `true` — the
+   exact order every Bridge language generator emits, #117). Decoders
+   return a plain array; set-typed fields re-apply sorting/dedup at the
+   model layer.
 6. **Decimals/uuids/enums** — textual; never parsed to floats or ordinals.
 
 ### Timestamps: the precision contract (#46)

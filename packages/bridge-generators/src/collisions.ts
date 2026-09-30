@@ -336,6 +336,7 @@ const GO_SETS: readonly RuntimeSymbol[] = [
   { name: 'Set', where: 'types.go (set<T> support)' },
   { name: 'SetToSlice', where: 'types.go (set<T> support)' },
   { name: 'SliceToSet', where: 'types.go (set<T> support)' },
+  { name: 'bridgeSetLess', where: 'types.go (canonical set order, #117)' },
 ];
 
 const GO_EVENTS: readonly RuntimeSymbol[] = [
@@ -394,6 +395,8 @@ const TS_SERVICES: readonly RuntimeSymbol[] = [
 const TS_SETS: readonly RuntimeSymbol[] = [
   { name: 'setToArray', where: 'src/types.ts (set<T> support)' },
   { name: 'arrayToSet', where: 'src/types.ts (set<T> support)' },
+  { name: 'bridgeCompareSetElements', where: 'src/types.ts (canonical set order, #117)' },
+  { name: 'bridgeCompareCodePoints', where: 'src/types.ts (canonical set order, #117)' },
 ];
 
 const TS_EVENTS: readonly RuntimeSymbol[] = [

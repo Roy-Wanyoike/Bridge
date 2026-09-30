@@ -13,7 +13,7 @@
  * different (host-driven) pattern.
  */
 
-import type { IRPackage } from '@bridge/core';
+import type { IRPackage, TypeRef } from '@bridge/core';
 import { generate } from '@bridge/generators';
 import { ffiCrateName } from './abi';
 import { fileHeader, generatedFile } from './util';
@@ -23,7 +23,10 @@ import type { GeneratedFile } from './util';
 export function generateWasm(ir: IRPackage): GeneratedFile[] {
   const crate = ffiCrateName(ir.name) + '-wasm';
   const files: GeneratedFile[] = [wasmCargoToml(ir, crate)];
-  // Reuse the canonical generated Rust types/validators.
+  // Reuse the canonical generated Rust types/validators. This is the ONE
+  // generate() call for the whole target: lib.rs wrapper names and the TS
+  // declarations below are derived from the IR, not by re-running the
+  // generator or re-parsing its output (issue #117).
   const dataFiles = generate(ir, { language: 'rust', generateServices: false, generateEvents: false });
   for (const path of ['src/types.rs', 'src/enums.rs', 'src/validate.rs']) {
     const file = dataFiles.find((f) => f.path === path);
@@ -115,16 +118,13 @@ function wasmLibRs(
   lines.push('    };');
   lines.push('}');
   lines.push('');
-  // Extract the struct names from the generated types module and emit one
-  // wrapper invocation per type.
-  const dataFiles = generate(ir, { language: 'rust', generateServices: false, generateEvents: false });
-  const typesFile = dataFiles.find((f) => f.path === 'src/types.rs');
-  const typeNames: string[] = [];
-  if (typesFile !== undefined) {
-    for (const match of typesFile.content.matchAll(/^pub struct (\w+)/gm)) {
-      typeNames.push(match[1]!);
-    }
-  }
+  // Extract the struct names from the IR and emit one wrapper invocation
+  // per type (every IR struct is emitted as `pub struct` in types.rs).
+  // Issue #117: derived from the IR, not by re-generating/re-parsing.
+  const typeNames = [...ir.types]
+    .filter((t) => t.kind === 'struct')
+    .map((t) => t.name)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   for (const name of typeNames) {
     lines.push(`bridge_wasm_type!(${name});`);
   }
@@ -147,12 +147,28 @@ function wasmLibRs(
   return generatedFile('src/lib.rs', `${lines.join('\n')}\n`);
 }
 
-/** index.d.ts: typed declarations for the wasm-bindgen output. */
+/**
+ * index.d.ts: typed declarations for the wasm-bindgen output, derived
+ * DIRECTLY from the IR (issue #117).
+ *
+ * The previous implementation regex-parsed the generated Rust
+ * (`/pub (\w+):\s*([^\n]+?),?$/gm`), which silently dropped every field
+ * declared with a raw identifier (`r#type`) — the regex cannot match the
+ * `r#` prefix — and rendered BTreeSet/BTreeMap/named types as `unknown`.
+ * Deriving from the same IR the Rust generator consumes removes both
+ * failure modes by construction: the field list is the IR field list
+ * (wire names), and every IR type shape has an explicit TS mapping
+ * below (mirroring the @bridge/generators TypeScript conventions:
+ * int64/uint64 → number with the documented 2^53 caveat, uuid/timestamp/
+ * decimal → string, bytes → Uint8Array, json → unknown).
+ */
 function tsDeclarations(ir: IRPackage): GeneratedFile {
   const lines: string[] = [];
   lines.push(fileHeader('//', ir.name));
   lines.push('');
   lines.push('//! Typed declarations for the wasm-bindgen output of this crate.');
+  lines.push('//! Derived from the contract IR; the Rust BTreeSet fields cross as');
+  lines.push('//! JSON arrays in canonical order, BTreeMap as JSON objects.');
   lines.push('//! Runtime shape: each Bridge struct type exposes `fromJson(string)`,');
   lines.push('//! `toJson()` and `validate()`; module-level `bridgePackage()` /');
   lines.push('//! `bridgeFormatVersion()` identify the contract.');
@@ -163,40 +179,91 @@ function tsDeclarations(ir: IRPackage): GeneratedFile {
   lines.push('export declare class BridgeWasmError extends Error {}');
   lines.push('');
 
-  const dataFiles = generate(ir, { language: 'rust', generateServices: false, generateEvents: false });
-  const typesFile = dataFiles.find((f) => f.path === 'src/types.rs');
-  const structs = new Map<string, Array<{ name: string; ts: string }>>();
-  if (typesFile !== undefined) {
-    const structBlocks = typesFile.content.split('#[derive(');
-    for (const block of structBlocks.slice(1)) {
-      const nameMatch = /pub struct (\w+)/.exec(block);
-      if (nameMatch === null) continue;
-      const fields: Array<{ name: string; ts: string }> = [];
-      for (const fieldMatch of /pub (\w+):\s*(.+),/g.exec(block) === null ? [] : block.matchAll(/pub (\w+):\s*([^\n]+?),?$/gm)) {
-        const rustName = fieldMatch[1]!;
-        const rustType = fieldMatch[2]!.trim();
-        fields.push({ name: rustName, ts: rustToTsType(rustType) });
-      }
-      structs.set(nameMatch[1]!, fields);
-    }
-  }
-  for (const [name, fields] of structs) {
-    const camel = name.charAt(0).toLowerCase() + name.slice(1);
-    lines.push(`export declare class ${name}Wasm {`);
-    lines.push(`  static fromJson(json: string): ${name}Wasm;`);
+  const structs = [...ir.types]
+    .filter((t) => t.kind === 'struct')
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const structType of structs) {
+    lines.push(`export declare class ${structType.name}Wasm {`);
+    lines.push(`  static fromJson(json: string): ${structType.name}Wasm;`);
     lines.push('  toJson(): string;');
     lines.push('  validate(): void;');
-    for (const field of fields) {
-      lines.push(`  readonly ${camelToJs(field.name)}: ${field.ts};`);
+    for (const field of structType.fields) {
+      const base = wasmTsType(field.type, ir);
+      // Field-level optionality renders as Rust Option<T> in types.rs,
+      // which serde_json crosses as null; an explicit optional TypeRef
+      // already carries its own "| null" from wasmTsType.
+      const nullable =
+        field.optional && field.type.kind !== 'optional' ? `${base} | null` : base;
+      lines.push(`  readonly ${camelToJs(field.name)}: ${nullable};`);
     }
     lines.push('}');
     lines.push('');
-    void camel;
   }
+
   lines.push('export declare function bridgePackage(): string;');
   lines.push('export declare function bridgeFormatVersion(): number;');
   lines.push('');
   return generatedFile('index.d.ts', `${lines.join('\n')}\n`);
+}
+
+/** String-like primitives render as `string` in every TS convention. */
+const WASM_STRING_LIKE_PRIMITIVES: ReadonlySet<string> = new Set([
+  'string',
+  'uuid',
+  'timestamp',
+  'decimal',
+]);
+
+/**
+ * IR type → TS type for the wasm declaration surface. Composites mirror
+ * the generated Rust shapes: list → Vec (plain array), set → BTreeSet
+ * (readonly array, elements in canonical order per issue #117 part A),
+ * map → BTreeMap (Record; JSON object keys are strings, mirroring
+ * mapKeyRef in mappings.ts), optional → Option (nullable).
+ */
+function wasmTsType(ref: TypeRef, ir: IRPackage): string {
+  switch (ref.kind) {
+    case 'primitive': {
+      const p = ref.primitive;
+      if (p === 'bool') return 'boolean';
+      if (p === 'bytes') return 'Uint8Array';
+      if (p === 'json') return 'unknown';
+      if (WASM_STRING_LIKE_PRIMITIVES.has(p)) return 'string';
+      return 'number'; // int32/int64/uint32/uint64/float32/float64
+    }
+    case 'named': {
+      // Local types win over same-named cross-package references (the
+      // generators' collision rules reject ambiguous contracts).
+      const local = ir.types.find((t) => t.name === ref.name);
+      if (local !== undefined) {
+        switch (local.kind) {
+          case 'alias':
+            return wasmTsType(local.target, ir);
+          case 'struct':
+            // The same struct's wasm-bindgen wrapper class.
+            return `${ref.name}Wasm`;
+          case 'enum': {
+            // Enums cross as their wire-name string (serde rename); the
+            // literal union mirrors the TS generator's enum mapping.
+            const variants = local.variants.map((v) => JSON.stringify(v.name));
+            return variants.length > 0 ? variants.join(' | ') : 'string';
+          }
+          case 'union':
+            // Unions have no wasm-bindgen wrapper: JSON {kind, value}.
+            return 'unknown';
+        }
+      }
+      return 'unknown'; // opaque cross-package passthrough (serde_json::Value)
+    }
+    case 'list':
+      return `${wasmTsType(ref.element, ir)}[]`;
+    case 'set':
+      return `readonly ${wasmTsType(ref.element, ir)}[]`;
+    case 'map':
+      return `Record<string, ${wasmTsType(ref.value, ir)}>`;
+    case 'optional':
+      return `${wasmTsType(ref.inner, ir)} | null`;
+  }
 }
 
 /** index.js: loader + typed façade over the wasm-bindgen output. */
@@ -243,29 +310,6 @@ function tsLoader(ir: IRPackage): GeneratedFile {
   lines.push('}');
   lines.push('');
   return generatedFile('index.ts', `${lines.join('\n')}\n`);
-}
-
-/** Rust type → TS type for declaration emission. */
-function rustToTsType(rustType: string): string {
-  const t = rustType.trim();
-  if (t === 'String' || t === 'uuid' || t.startsWith('String')) return 'string';
-  if (t === 'bool') return 'boolean';
-  if (t.startsWith('i') || t.startsWith('u') || t.startsWith('f')) {
-    return 'number';
-  }
-  if (t.startsWith('Vec<')) {
-    return `${rustToTsType(t.slice(4, -1))}[]`;
-  }
-  if (t.startsWith('Option<')) {
-    return `${rustToTsType(t.slice(7, -1))} | null`;
-  }
-  if (t.startsWith('BTreeMap<') || t.startsWith('HashMap<')) {
-    const inner = t.slice(t.indexOf('<') + 1, t.lastIndexOf('>'));
-    const value = inner.split(',').slice(1).join(',').trim();
-    return `Record<string, ${rustToTsType(value)}>`;
-  }
-  if (t === 'serde_json::Value' || t === 'JsonValue') return 'unknown';
-  return 'unknown';
 }
 
 function camelToJs(name: string): string {

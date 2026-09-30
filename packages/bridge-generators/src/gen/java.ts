@@ -19,9 +19,10 @@
  *   lowerCamelCase (keyword collisions get a trailing underscore).
  * - Optional fields map to java.util.Optional (boxed element types).
  * - `bytes` maps to byte[]; on the JSON wire it is a base64 string.
- * - `set<T>` maps to Set<T>; the wire format is ALWAYS a JSON array and
- *   toDict sorts elements (String natural ordering, i.e. UTF-16 code
- *   units — matching TypeScript) for deterministic wire output.
+ * - `set<T>` maps to Set<T>; the wire format is ALWAYS a JSON array in the
+ *   canonical Bridge set order (numbers numerically, strings by Unicode
+ *   code point via UTF-8 bytes, false < true — identical in all six
+ *   targets, #117) for deterministic wire output.
  * - Enums map to Java enums whose constant names are the declared
  *   SCREAMING_SNAKE wire names; fromWire throws IllegalArgumentException
  *   on unknown wire values.
@@ -210,6 +211,35 @@ function serializeLeafExpr(ref: TypeRef, value: string, input: GeneratorInput): 
 }
 
 /**
+ * Sort class of a set element for the canonical Bridge set order (#117):
+ * numbers numerically, strings by code point, enums by wire name,
+ * everything else by natural ordering (which for the remaining element
+ * kinds is best-effort and matches the pre-#117 behavior).
+ */
+function setElementSort(
+  ref: TypeRef,
+  input: GeneratorInput,
+): { kind: 'numeric' | 'bool' | 'string' | 'enum' | 'other'; enumName?: string } {
+  switch (ref.kind) {
+    case 'primitive':
+      if (NUMERIC_PRIMITIVES.has(ref.primitive)) return { kind: 'numeric' };
+      if (ref.primitive === 'bool') return { kind: 'bool' };
+      if (STRING_LIKE_PRIMITIVES.has(ref.primitive)) return { kind: 'string' };
+      return { kind: 'other' };
+    case 'named': {
+      // Aliases are substituted in Java, so resolve to the underlying type.
+      const aliasTarget = input.render.aliasTargets?.get(ref.name);
+      if (aliasTarget !== undefined) return setElementSort(aliasTarget, input);
+      const local = input.ir.types.find((t) => t.name === ref.name);
+      if (local !== undefined && local.kind === 'enum') return { kind: 'enum', enumName: ref.name };
+      return { kind: 'other' };
+    }
+    default:
+      return { kind: 'other' };
+  }
+}
+
+/**
  * Emits Java statements that serialize a composite value (list/set/map)
  * into a fresh local variable, returning the lines and the variable name.
  */
@@ -224,11 +254,22 @@ function serializeBlock(
     const lines: string[] = [];
     let source = value;
     if (ref.kind === 'set') {
-      // Deterministic wire order: sort a copy (natural ordering of the
-      // element type — UTF-16 code units for strings, matching TS).
+      // Deterministic wire order: the canonical Bridge set order (#117),
+      // identical in every target language. Numbers sort numerically and
+      // booleans false<true via natural ordering; strings (and enums, via
+      // their wire name) sort by Unicode code point — Java's natural
+      // String order is UTF-16 code units, which reorders supplementary
+      // characters, so sets of strings must use the UTF-8 comparator.
       const sorted = `s${depth}`;
+      const elementSort = setElementSort(ref.element, input);
       lines.push(`    List<${boxedTypeRef(ref.element, input)}> ${sorted} = new ArrayList<>(${value});`);
-      lines.push(`    Collections.sort(${sorted});`);
+      if (elementSort.kind === 'string') {
+        lines.push(`    ${sorted}.sort(BridgeJson::compareUtf8);`);
+      } else if (elementSort.kind === 'enum') {
+        lines.push(`    ${sorted}.sort(Comparator.comparing(${elementSort.enumName}::wire));`);
+      } else {
+        lines.push(`    Collections.sort(${sorted});`);
+      }
       source = sorted;
     }
     lines.push(`    List<Object> ${tmp} = new ArrayList<>();`);
@@ -455,6 +496,7 @@ function bridgeJsonFile(input: GeneratorInput): GeneratedFile {
   lines.push('');
   lines.push('import java.util.ArrayList;');
   lines.push('import java.util.Base64;');
+  lines.push('import java.nio.charset.StandardCharsets;');
   lines.push('import java.util.LinkedHashMap;');
   lines.push('import java.util.List;');
   lines.push('import java.util.Map;');
@@ -814,6 +856,23 @@ function bridgeJsonFile(input: GeneratorInput): GeneratedFile {
   lines.push('            throw new IllegalArgumentException(ctx + ": expected base64 bytes");');
   lines.push('        }');
   lines.push('    }');
+  lines.push('');
+  lines.push('    /**');
+  lines.push('     * Canonical string order for set elements (#117): compares by');
+  lines.push('     * UTF-8 bytes, i.e. Unicode code points — NOT String.compareTo,');
+  lines.push('     * which is UTF-16 code-unit order and reorders supplementary');
+  lines.push('     * (non-BMP) characters.');
+  lines.push('     */');
+  lines.push('    public static int compareUtf8(String a, String b) {');
+  lines.push('        byte[] ba = a.getBytes(StandardCharsets.UTF_8);');
+  lines.push('        byte[] bb = b.getBytes(StandardCharsets.UTF_8);');
+  lines.push('        int n = Math.min(ba.length, bb.length);');
+  lines.push('        for (int i = 0; i < n; i++) {');
+  lines.push('            int c = (ba[i] & 0xFF) - (bb[i] & 0xFF);');
+  lines.push('            if (c != 0) { return c; }');
+  lines.push('        }');
+  lines.push('        return ba.length - bb.length;');
+  lines.push('    }');
   lines.push('}');
   lines.push('');
   return generatedFile(`${'src/main/java/' + javaPackagePath(input.packageName)}/BridgeJson.java`, lines.join('\n'));
@@ -864,9 +923,10 @@ function typeKindDeclaration(type: IRTypeDefinition, className: string): string 
 }
 
 /** Java imports for a struct based on the constructs it uses. */
-function structImports(type: IRTypeDefinition & { kind: 'struct' }): string[] {
+function structImports(type: IRTypeDefinition & { kind: 'struct' }, input: GeneratorInput): string[] {
   const imports = new Set<string>(['java.util.List', 'java.util.Map', 'java.util.LinkedHashMap']);
   const usesSet = type.fields.some((f) => typeContainsCollection(f.type, 'set'));
+  const usesEnumSet = type.fields.some((f) => fieldHasEnumElementSet(f.type, input));
   const usesBytes = type.fields.some((f) => typeContainsPrimitive(f.type, 'bytes'));
   const usesOptional = type.fields.some((f) => fieldIsOptional(f));
   if (usesSet) {
@@ -875,10 +935,23 @@ function structImports(type: IRTypeDefinition & { kind: 'struct' }): string[] {
     imports.add('java.util.Set');
     imports.add('java.util.LinkedHashSet');
   }
+  if (usesEnumSet) imports.add('java.util.Comparator');
   if (usesList(type)) imports.add('java.util.ArrayList');
   if (usesBytes) imports.add('java.util.Base64');
   if (usesOptional) imports.add('java.util.Optional');
   return [...imports].sort();
+}
+
+/** True when the field carries a set<T> whose element is a local enum. */
+function fieldHasEnumElementSet(ref: TypeRef, input: GeneratorInput): boolean {
+  switch (ref.kind) {
+    case 'set':
+      return setElementSort(ref.element, input).kind === 'enum';
+    case 'optional':
+      return fieldHasEnumElementSet(ref.inner, input);
+    default:
+      return false;
+  }
 }
 
 function usesList(type: IRTypeDefinition & { kind: 'struct' }): boolean {
@@ -956,7 +1029,7 @@ function structFile(
   srcDir: string,
 ): GeneratedFile {
   const className = type.name;
-  const lines = typeFilePrologue(input, type, srcDir, structImports(type), className);
+  const lines = typeFilePrologue(input, type, srcDir, structImports(type, input), className);
   lines.push(...structClassBody(input, type, 0));
   lines.push('}');
   lines.push('');
@@ -1949,6 +2022,15 @@ function eventsFile(input: GeneratorInput, srcDir: string): GeneratedFile | unde
     'java.util.Set',
     'java.util.function.Consumer',
   ]);
+  // Enum-element set fields sort by wire name (canonical set order, #117),
+  // which needs java.util.Comparator in the events file too.
+  if (
+    sortedEvents(input.ir).some((event) =>
+      event.fields.some((f) => fieldHasEnumElementSet(f.type, input)),
+    )
+  ) {
+    imports.add('java.util.Comparator');
+  }
   for (const imp of [...imports].sort()) lines.push(`import ${imp};`);
   lines.push('');
   lines.push('/**');
