@@ -5,6 +5,45 @@ All notable changes to Bridge are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+No release tags exist yet — the first release has not been cut (CI is
+blocked by the Actions billing lock, [#127](https://github.com/Roy-Wanyoike/bridge/issues/127);
+see [RELEASE.md](RELEASE.md)). The versioned headings and the links at the
+bottom of this file refer to the tags that the first release will create.
+
+## [Unreleased]
+
+### Fixed
+
+- **Compat**: impact-analysis taint fixed-point no longer terminates early —
+  BREAKING severity is no longer under-reported to consumers (#111).
+- **Core**: semantic analysis rejects names reused across type/event/service
+  categories, so generators can no longer emit non-compiling output (#113).
+- **Generators**: per-language identifier-collision diagnostics for case
+  variants, runtime names, Java getters and C# members (#116); canonical,
+  language-independent set wire ordering (#117, see
+  [docs/SERIALIZATION.md](docs/SERIALIZATION.md)).
+- **Generators**: byte-level snapshot tests for every target plus
+  toolchain-gated adversarial compile gates that skip loudly — the
+  CONTRIBUTING mandate is met (#118).
+- **CLI/LSP**: bounded LSP message sizes, HTTP response validation, EPIPE
+  and framing-failure handling, strict UTF-8, TOCTOU-safe writes, shutdown
+  discipline (#119).
+- **Registry service**: audit append fails closed, rate limiter sweeps on a
+  schedule, publish signatures bound to URL coordinates, token entropy
+  floor, loopback default bind, security headers (#120).
+- **Dashboard**: live mode no longer crashes on contract detail/diff/
+  overview pages (#121); URL-encoded route params, bounded fan-outs, empty
+  states, security headers, honest error copy (#122).
+- **Dashboard**: frontend test suite added — 94 tests over the registry
+  client, page renders and encoding (#123); run via `cd dashboard && npm test`.
+- **Infra**: release guard asserts `CLI_VERSION` lockstep, refuses
+  `sha256 :no_check` Homebrew formulas, pins bun, derives the npm publish
+  list from workspace manifests (#124).
+- **Docs**: truth sync — test counts (831 across nine packages plus the
+  94-test dashboard suite), CI-verification claims corrected (which
+  languages are CI-compile-verified vs local-only), CLI command list, CI
+  matrix description, CHANGELOG anchors (#125).
+
 ## [0.2.1] — production-readiness pass
 
 ### Fixed
@@ -182,5 +221,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ARCHITECTURE](docs/ARCHITECTURE.md) — cross-linked and verified against
   the shipped APIs.
 
+[0.2.1]: https://github.com/Roy-Wanyoike/bridge/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Roy-Wanyoike/bridge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Roy-Wanyoike/bridge/releases/tag/v0.1.0

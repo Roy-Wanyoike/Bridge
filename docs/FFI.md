@@ -40,7 +40,7 @@ which makes ABI drift a compile error instead of a runtime surprise.
 
 ## Cross-language verification
 
-`scripts/verify-ffi.sh` is a real end-to-end proof, run in CI and locally:
+`scripts/verify-ffi.sh` is a real end-to-end proof, run locally (it is a local-only gate, not wired into any CI workflow):
 
 1. Generate the Rust crate + Go client for the payments contract.
 2. `cargo build --release` the cdylib.

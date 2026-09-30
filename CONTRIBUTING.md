@@ -13,7 +13,7 @@ By participating in this project you agree to abide by our [Code of Conduct](COD
 3. Run the test suite: `npm test`.
 4. Make your changes with tests. A feature is not done when the code exists — it is done when it is implemented, tested, documented, and verified.
 
-The full suite currently runs 669+ tests across all nine packages; `npm run build` must succeed and `npm test` must report 0 failures for every PR.
+The full suite currently runs 831 tests across all nine packages (CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112), and the dashboard carries its own 94-test suite — run `npm test` in `dashboard/`. The generator suite includes byte-level snapshot tests plus toolchain-gated compile checks that skip loudly (never silently) when a local toolchain is missing. `npm run build` must succeed and `npm test` must report 0 failures for every PR; dashboard changes must additionally pass `npm run lint`, `npm run typecheck` and `npm test` inside `dashboard/`.
 
 ## Repository layout
 

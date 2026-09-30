@@ -118,8 +118,9 @@ const order = await client.createOrder({ total_cents: 777, currency: "GBP" });
 ```
 
 The cross-language pairing above is not aspirational: it runs in
-[`scripts/verify-events-rpc.sh`](../scripts/verify-events-rpc.sh) on every
-change, and generated Rust/Go crates carry their own loopback tests
+[`scripts/verify-events-rpc.sh`](../scripts/verify-events-rpc.sh) — a
+local gate, not wired into any CI workflow — and generated Rust/Go crates
+carry their own loopback tests
 (`tests/roundtrip.rs`, `roundtrip_test.go`).
 
 ## Transport roadmap

@@ -1,6 +1,6 @@
 # Bridge — Market Analysis
 
-*Strategy doc · maintained on `main` under `docs/strategy/` · last substantive update: 0.2.0 ship (v0.2.0, 669+ tests green).*
+*Strategy doc · maintained on `main` under `docs/strategy/` · last substantive update: 0.2.1 line (831 tests green).*
 
 > **Sourcing note.** This document combines web research (vendor documentation, analyst summaries, practitioner writing — gathered via live search at authoring time) with structured reasoning. Where a number is an analyst estimate or our own model, it is labeled **estimate**. Where a claim is about a competitor, it is written to be defensible: each tool is assessed at its best, not as a strawman. Nothing here is a promise of future features; the shipped/pending split always lives in the [README](../../README.md) and [ROADMAP](../ROADMAP.md).
 
@@ -180,7 +180,7 @@ Most tools in §2 are *parsers with opinions*. Bridge is a *compiler with govern
 
 ### 4.2 Competitive matrix
 
-Honesty rules for this matrix: "partial" means a real but ecosystem-local or shallower implementation; Bridge's column states shipped (v0.2.0, 669+ tests) vs. planned (linked issues). Nothing here diminishes the incumbents' strengths recorded in §2 — it shows where the *gaps* are.
+Honesty rules for this matrix: "partial" means a real but ecosystem-local or shallower implementation; Bridge's column states shipped (v0.2.0; suite now at 831 tests) vs. planned (linked issues). Nothing here diminishes the incumbents' strengths recorded in §2 — it shows where the *gaps* are.
 
 | Capability | Protobuf + Buf | Avro + Schema Registry | OpenAPI (+ oasdiff) | GraphQL (+ inspector) | Smithy | TypeSpec | JSON Schema | CUE | **Bridge** |
 |---|---|---|---|---|---|---|---|---|---|
@@ -246,7 +246,7 @@ The honest summary: Bridge is not entering a proven category with established pr
 2. **Registry network effects.** Every published contract adds nodes and edges (dependents) to the graph. The graph is the value: impact analysis, consumer discovery, audit trails. A competing registry without Bridge's contracts and graph starts empty; migration cost grows monotonically with adoption.
 3. **CI governance lock-in.** Once `bridge check` gates merges and policy lives in the registry, removing Bridge means re-negotiating every team's pipeline and losing the historical verdict record — the audit trail regulators and platform teams want *is* the lock-in.
 
-**Milestones that de-risk the thesis (already visible in the repo):** a working end-to-end pipeline with 669+ green tests across nine packages; byte-deterministic generation proven by CI round-trips; an immutable registry with tamper detection (local + multi-tenant service); consumer-aware impact analysis in CI; and a public roadmap (issues [#15](https://github.com/Roy-Wanyoike/bridge/issues/15)–[#25](https://github.com/Roy-Wanyoike/bridge/issues/25)) whose remaining step (agent-facing artifacts) maps one-to-one onto the moat. For a seed-stage investor, this is a rare shape: the platform — compiler, registry service, impact gate, release pipeline — is *done and tested*; the remaining work is breadth and product surface.
+**Milestones that de-risk the thesis (already visible in the repo):** a working end-to-end pipeline with 831 green tests across nine packages; byte-deterministic generation proven by CI round-trips; an immutable registry with tamper detection (local + multi-tenant service); consumer-aware impact analysis in CI; and a public roadmap (issues [#15](https://github.com/Roy-Wanyoike/bridge/issues/15)–[#25](https://github.com/Roy-Wanyoike/bridge/issues/25)) whose remaining step (agent-facing artifacts) maps one-to-one onto the moat. For a seed-stage investor, this is a rare shape: the platform — compiler, registry service, impact gate, release pipeline — is *done and tested*; the remaining work is breadth and product surface.
 
 ---
 

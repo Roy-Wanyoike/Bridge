@@ -41,6 +41,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Check docs facts (stale counts / dropped canonical facts fail the build)
+        run: node scripts/check-docs-facts.mjs
+
       - name: Test
         run: npm test
 
@@ -116,7 +119,7 @@ jobs:
         run: bash scripts/verify-csharp.sh
 
   dashboard:
-    name: Dashboard (lint + typecheck + build)
+    name: Dashboard (lint + typecheck + build + test)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -136,6 +139,8 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+      - name: Test
+        run: npm test
 
   registry-service-postgres:
     name: Registry service (PostgreSQL integration)

@@ -6,11 +6,20 @@ How Bridge tests itself, and how to reproduce any failure deterministically.
 
 | Layer | What it proves | Where |
 | ----- | -------------- | ----- |
-| Unit + functional suites | Every package behaves to spec (669+ tests across nine packages) | `packages/*/src/test/` |
+| Unit + functional suites | Every package behaves to spec (831 tests across nine packages: CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112) | `packages/*/src/test/` |
+| Dashboard suite | The registry console's clients, pages and routing behave to spec (94 tests — a separate app, run via `cd dashboard && npm test`) | `dashboard/tests/` |
 | Golden vectors | 4 languages agree byte-for-byte on the wire | `packages/bridge-serialization/vectors/` + `scripts/verify-serialization.sh` |
 | Property-based tests | Invariants hold over hundreds of seeded generated inputs | `packages/*/src/test/property/` |
 | Fuzz harness | The parser and decoders never crash on hostile input | `packages/bridge-core/src/fuzz/` + `bin/bridge-fuzz` |
 | Cross-language examples | Generated code really runs | `scripts/verify-*.sh`, `examples/` |
+
+The `scripts/verify-*.sh` gates are local-first: Go, Rust, Java and C#
+generated code is additionally compile-verified by dedicated CI jobs, while
+`verify-ts.sh`, `verify-python.sh`, `verify-ffi.sh` and
+`verify-events-rpc.sh` currently run locally only (no CI workflow invokes
+them). Generators also carry committed byte-level snapshot tests plus
+toolchain-gated adversarial compile checks that skip loudly without a local
+toolchain — the same output the CI generator-verify jobs enforce.
 
 ## Property-based testing
 
