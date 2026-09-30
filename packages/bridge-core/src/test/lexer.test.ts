@@ -1,7 +1,7 @@
 /**
- * Lexer tests: UTF-8 BOM tolerance at position 0 and CRLF canonicalization
- * of doc comments. (Core lexing behavior is exercised through the parser
- * suite; these cover the adversarial-input cases from issue #42.)
+ * Lexer tests: UTF-8 BOM tolerance at position 0, CRLF canonicalization
+ * of doc comments, and astral (non-BMP) character handling — one code point
+ * must yield exactly one BR1001, never one per surrogate half (issue #114).
  */
 
 import { test } from 'node:test';
@@ -74,4 +74,55 @@ test('lone \\r is whitespace and CRLF still advances the line counter', () => {
   assert.equal(typeKeyword?.line, 3, 'each CRLF advances exactly one line');
   const eof = lexed.tokens[lexed.tokens.length - 1];
   assert.equal(eof?.kind, 'eof');
+});
+
+// -------------------------------------------------------- astral characters
+
+test('one astral character yields exactly one BR1001; columns stay UTF-16 based', () => {
+  // `package p😀中v1`: 😀 is one astral code point (2 UTF-16 code units),
+  // 中 is one BMP code point. Per-code-unit scanning used to report the
+  // emoji twice (columns 10 and 11); now each bad character is reported
+  // exactly once and the columns remain code-unit counts.
+  const lexed = tokenize('package p😀中v1\n', 'astral.bridge');
+  const unexpected = lexed.diagnostics.filter((d) => d.code === 'BR1001');
+  assert.equal(unexpected.length, 2, JSON.stringify(lexed.diagnostics));
+  const emoji = unexpected[0];
+  const bmp = unexpected[1];
+  assert.equal(emoji?.line, 1);
+  assert.equal(emoji?.column, 10, 'the emoji starts at column 10');
+  assert.ok(emoji?.message.includes('😀') ?? false, `message must show the emoji: ${emoji?.message}`);
+  assert.equal(bmp?.column, 12, 'the BMP character starts at column 12 (the emoji spans two code units)');
+  assert.ok(bmp?.message.includes('中') ?? false, `message must show 中: ${bmp?.message}`);
+  // Content around the bad characters lexes unaffected; `v1` sits after the
+  // emoji (2 code units) + 中 (1 code unit).
+  assert.deepEqual(
+    lexed.tokens
+      .filter((t) => t.kind === 'ident')
+      .map((t) => [t.text, t.column]),
+    [
+      ['p', 9],
+      ['v1', 13],
+    ],
+  );
+});
+
+test('an astral character inside a string or comment is not an error', () => {
+  const lexed = tokenize(
+    'package p\n/// Emoji docs 😀\ntype T {\n    label: string = "😀"\n}\n',
+    'astral.bridge',
+  );
+  assert.deepEqual(lexed.diagnostics, [], JSON.stringify(lexed.diagnostics));
+  const doc = lexed.tokens.find((t) => t.kind === 'doc');
+  assert.equal(doc?.text, 'Emoji docs 😀');
+  const str = lexed.tokens.find((t) => t.kind === 'string');
+  assert.equal(str?.text, '😀');
+});
+
+test('a lone trailing surrogate produces exactly one diagnostic', () => {
+  // U+D800 with no low surrogate after it: one code unit, one diagnostic.
+  const lexed = tokenize('package p\n\u{D800}', 'surrogate.bridge');
+  const unexpected = lexed.diagnostics.filter((d) => d.code === 'BR1001');
+  assert.equal(unexpected.length, 1, JSON.stringify(lexed.diagnostics));
+  assert.equal(unexpected[0]?.line, 2);
+  assert.equal(unexpected[0]?.column, 1);
 });

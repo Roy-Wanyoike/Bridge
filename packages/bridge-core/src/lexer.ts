@@ -6,6 +6,12 @@
  * and lexing recovers in place so multiple errors can be reported in a
  * single pass.
  *
+ * Position semantics: columns count UTF-16 code units (matching the UTF-16
+ * positions that bridge-lsp speaks over the LSP wire), so one astral
+ * (non-BMP) character spans two columns. Scanning still consumes whole
+ * Unicode code points, so a single astral character produces at most ONE
+ * diagnostic — never one per surrogate half.
+ *
  * Grammar surface (v1):
  * - identifiers:      [A-Za-z_][A-Za-z0-9_]*
  * - keywords:         package import type enum union alias service event
@@ -313,16 +319,27 @@ export function tokenize(text: string, filePath: string): LexResult {
       continue;
     }
 
-    // --- anything else is an error (recover by skipping one character) --------
+    // --- anything else is an error (recover by skipping one code point) -------
+    // Consume the FULL code point: one astral character (a surrogate pair,
+    // e.g. an emoji) is one character and must produce exactly one BR1001 —
+    // per-code-unit `charAt` scanning used to report each surrogate half
+    // separately (two diagnostics at columns n and n+1). `codePointAt`
+    // returns the whole pair for astral characters and the lone value for
+    // unpaired surrogates, so the message always shows the actual character.
+    // Columns stay UTF-16 code-unit based (see the module header): the
+    // column advances by the code point's UTF-16 length (2 for astral, 1
+    // otherwise), identical to how every other token advances it.
+    const codePoint = text.codePointAt(i) ?? 0xfffd;
     error(
       LEXER_CODES.unexpectedChar,
-      `Unexpected character \`${ch}\`.`,
+      `Unexpected character \`${String.fromCodePoint(codePoint)}\`.`,
       'This character cannot appear in a Bridge file — remove it or check the Bridge IDL grammar.',
       line,
       column,
     );
-    i++;
-    column++;
+    const charWidth = codePoint > 0xffff ? 2 : 1;
+    i += charWidth;
+    column += charWidth;
   }
 
   tokens.push({ kind: 'eof', text: '', line, column });

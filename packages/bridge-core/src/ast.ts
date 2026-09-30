@@ -331,6 +331,16 @@ export interface PackageDeclNode {
 /** An `import some.package` statement. */
 export interface ImportDeclNode {
   name: string;
+  /**
+   * Doc comment written above the import, if any. Kept on the AST (and
+   * re-emitted by the formatter above the `import` line) so docs above
+   * `import` are neither dropped nor misattributed to the following
+   * declaration. The canonical IR keeps `imports` as bare dotted names
+   * (frozen `IRPackage.imports: string[]` contract), so import docs
+   * deliberately end at the AST boundary — consistent with this module's
+   * design: the AST preserves source-level detail the IR normalizes away.
+   */
+  docs?: string;
   line: number;
   column: number;
 }

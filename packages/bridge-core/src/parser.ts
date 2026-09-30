@@ -322,6 +322,12 @@ class Parser {
         }
 
         if (tok.text === 'import') {
+          // Doc comments above `import` belong to the import itself — take
+          // them here so they are neither misattributed to the next
+          // declaration nor silently dropped at EOF. They stay on the AST
+          // node (the formatter re-prints them above the `import` line); the
+          // IR keeps `imports` as bare dotted names.
+          const docs = this.takeDocs();
           if (seenDecl) {
             this.err(
               SYNTAX_ERROR,
@@ -338,6 +344,7 @@ class Parser {
             line: nameTok.line,
             column: nameTok.column,
           };
+          if (docs !== undefined) imp.docs = docs;
           file.imports.push(imp);
           continue;
         }
@@ -567,16 +574,16 @@ class Parser {
     let deprecated: string | true | undefined;
     for (;;) {
       if (!this.atPunct('@')) break;
-      const at = this.peek();
       const mod = this.parseAtModifier();
       if (mod.kind === 'deprecated') {
         deprecated = mod.value;
       } else if (mod.kind === 'constraint') {
         constraints.push(mod.constraint);
-      } else {
-        // `parseAtModifier` already reported; make sure we always progress.
-        if (this.peek() === at) this.next();
       }
+      // Invariant: `parseAtModifier` always consumes the `@` — progress is
+      // guaranteed by that consumption, so this loop terminates even when a
+      // malformed modifier (e.g. the `@ @` in `a: string @ @ @ :`) reports
+      // an error and returns `{ kind: 'none' }`. No extra guard is needed.
     }
 
     let defaultValue: DefaultValueNode | undefined;
