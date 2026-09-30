@@ -4,11 +4,19 @@
 // (`/contracts/${org}/${project}/${contract}`) and asserts the target exists.
 // Run: node scripts/verify-demo-links.mjs
 import { execSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const DASH = '/home/z/my-project/worktrees/dash-ui/dashboard';
+// The dashboard lives next to scripts/ in the repo checkout — resolve it
+// relative to this script so the check works on any machine (a hardcoded
+// absolute path only ever worked on one workstation).
+const DASH = join(import.meta.dirname, '..', 'dashboard');
+if (!existsSync(DASH)) {
+  console.error(`verify-demo-links: dashboard directory not found at ${DASH}`);
+  console.error('Expected ../dashboard relative to scripts/ — run this from a full repo checkout.');
+  process.exit(1);
+}
 const out = mkdtempSync(join(tmpdir(), 'demolinks-'));
 try {
   execSync(

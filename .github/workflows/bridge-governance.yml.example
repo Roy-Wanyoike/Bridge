@@ -29,6 +29,11 @@ permissions:
 
 env:
   BRIDGE_REGISTRY: .bridge-registry
+  # The freshly built CLI inside the /tmp/bridge clone, invoked by absolute
+  # path: packages/bridge-cli/dist/bin contains only `bridge.js`, so the
+  # directory cannot be put on PATH — run it explicitly with node (see the
+  # gate step below).
+  BRIDGE_BIN: /tmp/bridge/packages/bridge-cli/dist/bin/bridge.js
 
 jobs:
   bridge-governance:
@@ -47,7 +52,8 @@ jobs:
         run: |
           git clone https://github.com/Roy-Wanyoike/bridge.git /tmp/bridge
           cd /tmp/bridge && npm install && npm run build
-          echo "$(pwd)/packages/bridge-cli/dist/bin" >> "$GITHUB_PATH"
+          # No PATH edit here: dist/bin has no extensionless `bridge`
+          # executable — the gate step invokes node "$BRIDGE_BIN" instead.
 
       - name: Find changed candidate contracts
         id: changed
@@ -70,7 +76,7 @@ jobs:
               continue
             fi
             echo "### \`$name\`" >> bridge-report.md
-            if ! bridge impact "$name" --to "$f" --registry "$BRIDGE_REGISTRY" \
+            if ! node "$BRIDGE_BIN" impact "$name" --to "$f" --registry "$BRIDGE_REGISTRY" \
                  --format markdown --strict >> bridge-report.md 2>> bridge-errors.txt; then
               failed=1
             fi
