@@ -48,6 +48,67 @@ export const Levels = {
 
 const ALL_ROLES: readonly string[] = ['read', 'write', 'admin'];
 
+/**
+ * Minimum accepted static-token length in characters (issue #120 item 7).
+ *
+ * The constant-time note in {@link authenticateStaticToken} leans on tokens
+ * carrying ≥128 bits of entropy — 32 characters is the documented floor
+ * (32 hex chars = 128 bits; longer base64/base62 secrets exceed it). Enforced
+ * at startup by {@link assertTokenEntropy}; never per request.
+ */
+export const TOKEN_MIN_LENGTH = 32;
+
+/** Options for {@link assertTokenEntropy}. Kept local to this module. */
+export interface TokenEntropyOptions {
+  /**
+   * `true` (production profile): a short token is a hard `TypeError` that
+   * aborts startup. `false`/`undefined` (default profile): a loud
+   * `console.warn` on stderr and the service still boots (dev/test convenience).
+   */
+  production?: boolean;
+}
+
+/**
+ * Enforce the documented static-token entropy floor (issue #120 item 7):
+ * every static token shorter than {@link TOKEN_MIN_LENGTH} characters is
+ * refused at startup — hard error under the production profile, loud stderr
+ * warning otherwise.
+ *
+ * The message identifies the offending entry by its positional index and the
+ * OWNER (tenant) only. The raw token material is NEVER echoed — not in the
+ * error, not in the warning.
+ *
+ * Called from the CLI options builder (`buildOptions` in
+ * `bin/bridge-registry-service.ts`) with the profile flag. Library consumers
+ * that build `RegistryServiceOptions` by hand should call it themselves
+ * before serving traffic.
+ */
+export function assertTokenEntropy(tokens: TokenTable, opts: TokenEntropyOptions = {}): void {
+  let index = 0;
+  for (const [token, info] of Object.entries(tokens)) {
+    const owner =
+      typeof info === 'object' && info !== null && typeof (info as RegistryTokenInfo).tenant === 'string'
+        ? (info as RegistryTokenInfo).tenant
+        : 'unknown owner';
+    if (token.length < TOKEN_MIN_LENGTH) {
+      const where = `static token #${index + 1} (owner '${owner}')`;
+      if (opts.production === true) {
+        throw new TypeError(
+          `auth: ${where} is ${token.length} character(s), below the documented minimum of ` +
+            `${TOKEN_MIN_LENGTH} characters (~128 bits of entropy). Generate secrets with ` +
+            `'openssl rand -hex 32' (or 24+ base64url characters). Refusing to start in the production profile.`,
+        );
+      }
+      console.warn(
+        `[bridge-registry-service] WARNING: ${where} is only ${token.length} character(s), below the ` +
+          `${TOKEN_MIN_LENGTH}-character (~128-bit) minimum. Such tokens are guessable at the auth rate ` +
+          'limit (120 capacity @ 30/s per IP). Rotate it before exposing this service.',
+      );
+    }
+    index += 1;
+  }
+}
+
 /** Max accepted `Authorization` header length (bound parsing work). */
 const MAX_AUTH_HEADER = 16 * 1024;
 /** Default JWT time-claim leeway in seconds. */
@@ -81,6 +142,10 @@ function unknownKey(): ServiceError {
  * Validate a token table eagerly (at `createServer` time): every entry must
  * carry a non-empty string `tenant` and a known `role`. Malformed tables are
  * programming errors → `TypeError`.
+ *
+ * Shape only: the entropy floor is a separate, profile-aware startup check
+ * ({@link assertTokenEntropy}) so dev/test tables with short tokens keep
+ * working here.
  */
 export function assertTokenTable(tokens: TokenTable): TokenTable {
   for (const [token, info] of Object.entries(tokens)) {
@@ -129,10 +194,11 @@ export function authenticateStaticToken(tokens: TokenTable, authorization: strin
   //
   // Constant-time note: a keyed map lookup is not constant-time. That is
   // acceptable here because bearer tokens must be high-entropy secrets
-  // (≥128 bits) — timing signals on the table index are then impractical
-  // to exploit. A truly constant-time comparison over a token TABLE would
-  // require HMAC-ing every candidate key; use the OIDC mechanism for
-  // production fleets.
+  // (≥128 bits) — a startup floor (TOKEN_MIN_LENGTH / assertTokenEntropy,
+  // issue #120) keeps degenerate secrets out of real deployments — so
+  // timing signals on the table index are then impractical to exploit. A
+  // truly constant-time comparison over a token TABLE would require HMAC-ing
+  // every candidate key; use the OIDC mechanism for production fleets.
   if (!Object.prototype.hasOwnProperty.call(tokens, token)) {
     throw unauthenticated('missing or invalid bearer token');
   }

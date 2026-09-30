@@ -144,3 +144,77 @@ export class FileAuditSink implements AuditBackend {
     return applyAuditFilter(entries, filter);
   }
 }
+
+// ------------------------------------------------- auth-flood ring protection
+
+/**
+ * Sliding protection for the audit ring against auth floods (issue #120):
+ * failed authentications that presented a WELL-FORMED bearer token are
+ * persisted as `action: 'auth'` security events, so an unauthenticated
+ * flood of garbage-but-well-formed tokens can evict real history from the
+ * bounded ring (10k entries). The gate caps how many failed-auth entries
+ * ONE client IP may persist per time window; beyond the cap the entry is
+ * dropped before it reaches the backend (the HTTP response is unaffected).
+ *
+ * Design choice — a small dedicated fixed-window map rather than reusing
+ * {@link TokenBucketLimiter}: the limiter answers a different question
+ * ("may this REQUEST run?") and is globally disable-able via
+ * `rateLimit.enabled: false`, which must not disable audit hygiene; its
+ * refill semantics (429 + Retry-After) are meaningless for persistence
+ * gating, and its buckets are keyed per tier. A fixed window (count
+ * failures since the first failure of the current window) is deliberately
+ * coarse: the gate bounds ring pollution, it does not need smooth fairness.
+ *
+ * Memory is bounded twice over: counters expire with their window, and the
+ * map is pruned (expired first, then oldest-inserted) when it tracks more
+ * than {@link MAX_TRACKED_AUTH_FAILURE_IPS} IPs.
+ */
+/** Length of one gate window. */
+export const AUTH_FAILURE_WINDOW_MS = 60_000;
+/** Persisted failed-auth audit entries allowed per IP per window. */
+export const AUTH_FAILURE_MAX_PER_WINDOW = 20;
+/** Upper bound on IPs tracked simultaneously (memory bound, not policy). */
+export const MAX_TRACKED_AUTH_FAILURE_IPS = 10_000;
+
+export class AuthFailureAuditGate {
+  private readonly windows = new Map<string, { start: number; count: number }>();
+
+  public constructor(
+    /** Injectable clock (ms since epoch) for tests. */
+    private readonly now: () => number = () => Date.now(),
+    private readonly windowMs: number = AUTH_FAILURE_WINDOW_MS,
+    private readonly maxPerWindow: number = AUTH_FAILURE_MAX_PER_WINDOW,
+  ) {}
+
+  /**
+   * Account one failed-auth audit entry for `ip`; `true` when it may be
+   * persisted, `false` when the per-IP window budget is exhausted (drop it).
+   */
+  public allow(ip: string): boolean {
+    const t = this.now();
+    if (this.windows.size >= MAX_TRACKED_AUTH_FAILURE_IPS) this.prune(t);
+    const window = this.windows.get(ip);
+    if (window === undefined || t - window.start >= this.windowMs) {
+      // Map insertion order ≈ arrival order, so a forced prune below
+      // evicts the least recently active IPs first.
+      if (this.windows.size >= MAX_TRACKED_AUTH_FAILURE_IPS) this.windows.delete(this.windows.keys().next().value as string);
+      this.windows.set(ip, { start: t, count: 1 });
+      return true;
+    }
+    if (window.count >= this.maxPerWindow) return false;
+    window.count += 1;
+    return true;
+  }
+
+  /** IPs currently tracked (tests/introspection). */
+  public get trackedIps(): number {
+    return this.windows.size;
+  }
+
+  /** Drop expired windows; keep counting when still inside the window. */
+  private prune(t: number): void {
+    for (const [ip, window] of this.windows) {
+      if (t - window.start >= this.windowMs) this.windows.delete(ip);
+    }
+  }
+}

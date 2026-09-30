@@ -9,6 +9,7 @@ import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 import { canonicalJson } from '@bridge/core';
 import {
   Levels,
+  assertTokenEntropy,
   assertTokenTable,
   authenticateStaticToken,
   createAuthenticator,
@@ -56,6 +57,54 @@ test('static tokens: prototype-chain names never authenticate (issue #48)', () =
   }
   // The real token still works and the table stays untouched.
   assert.equal(authenticateStaticToken(tokens, 'Bearer real-secret').org, 'acme');
+});
+
+test('static tokens: entropy floor — production hard-fails, default warns (issue #120)', () => {
+  const short = { 'short-secret': { tenant: 'acme', role: 'read' as const } };
+
+  // Production profile: hard startup error. It names the owner and the
+  // documented minimum but NEVER the raw token material.
+  assert.throws(
+    () => assertTokenEntropy(short, { production: true }),
+    (err: unknown) => {
+      assert.ok(err instanceof TypeError);
+      assert.match(err.message, /acme/);
+      assert.match(err.message, /32/);
+      assert.equal(err.message.includes('short-secret'), false, 'raw token must never appear in the error');
+      return true;
+    },
+  );
+
+  // Default profile: loud stderr warning, startup proceeds.
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]): void => {
+    warnings.push(args.join(' '));
+  };
+  try {
+    assert.doesNotThrow(() => assertTokenEntropy(short));
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /acme/);
+  assert.match(warnings[0]!, /WARNING/);
+  assert.equal(warnings[0]!.includes('short-secret'), false, 'raw token must never appear in the warning');
+
+  // Tokens at/above the floor are unaffected in BOTH profiles.
+  const longSecret = 'a'.repeat(32);
+  const long = { [longSecret]: { tenant: 'acme', role: 'write' as const } };
+  let warned = 0;
+  console.warn = (): void => {
+    warned += 1;
+  };
+  try {
+    assert.doesNotThrow(() => assertTokenEntropy(long));
+    assert.doesNotThrow(() => assertTokenEntropy(long, { production: true }));
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warned, 0, 'a 32-character token must not trip the floor');
 });
 
 test('levels: requireLevel enforces the scope hierarchy', () => {

@@ -217,8 +217,12 @@ export interface AuditFilter {
 }
 
 /**
- * Audit sink/storage. `append` must be loss-tolerant (the server logs and
- * continues when it throws); `query` returns entries newest → oldest.
+ * Audit sink/storage. `append` may throw (driver outage, IO error); how the
+ * server reacts is governed by `RegistryServiceOptions.auditFailureMode`
+ * (issue #120): the default `'fail'` rejects the in-flight request with a
+ * 500 envelope so no unaudited operation is ever acknowledged, while
+ * `'best-effort'` logs the drop to stderr (`audit.dropped`) and serves the
+ * response anyway. `query` returns entries newest → oldest.
  */
 export interface AuditBackend {
   append(entry: AuditEntry): void | Promise<void>;
@@ -353,6 +357,16 @@ export interface RegistryServiceOptions {
    * data). Pass a {@link AuditBackend} to fan out elsewhere.
    */
   audit?: AuditBackend;
+  /**
+   * Audit-failure policy (issue #120). `'fail'` (the default): a failed
+   * audit append fails the request with a 500 `audit-unavailable` envelope —
+   * the service never acknowledges an operation it could not record
+   * (fail closed). `'best-effort'`: the failure is logged to stderr as
+   * `audit.dropped <reason>` and the response is served anyway (the
+   * pre-#120 behavior; only for deployments where availability outranks
+   * audit completeness).
+   */
+  auditFailureMode?: 'fail' | 'best-effort';
   /** Bind host for {@link start}; defaults to all interfaces. */
   host?: string;
 }

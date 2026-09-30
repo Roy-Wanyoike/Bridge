@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { start } from '../server';
 import { FileAuditSink } from '../audit';
+import { assertTokenEntropy } from '../auth';
 import { InMemoryDriver } from '../storage/memory';
 import { PostgresDriver, parseDsn } from '../storage/postgres/driver';
 import type { PgConnectOptions } from '../storage/postgres/driver';
@@ -27,11 +28,19 @@ Usage:
 
 Options:
   --port <n>                     TCP port to bind (default: 4350; 0 = auto-assign)
-  --host <addr>                  Interface to bind (default: all interfaces)
+  --host <addr>                  Interface to bind (default: 127.0.0.1 —
+                                 loopback only). Binding a non-loopback
+                                 address (0.0.0.0, a LAN IP, ::) requires
+                                 this explicit flag and prints a loud
+                                 SECURITY WARNING to stderr before the
+                                 socket opens.
   --driver <memory|postgres>     Storage driver (default: memory)
   --pg-dsn <dsn>                 PostgreSQL DSN (postgres/postgresql://user:pass@host/db)
   --token <secret>=<org>:<role>  Static bearer token; repeatable.
-                                 role: read | write | admin
+                                 role: read | write | admin. Tokens shorter
+                                 than 32 characters (~128-bit entropy floor)
+                                 warn on stderr; under the production
+                                 profile they REFUSE to start.
   --oidc-issuer <url>            OIDC issuer (iss claim)
   --oidc-audience <aud>          OIDC audience (aud claim)
   --oidc-jwks-url <url>          JWKS URL (default: <issuer>/.well-known/jwks.json)
@@ -52,11 +61,18 @@ Options:
                                  file (entries always also go to the driver)
   --audit-retention-days <days>  Postgres only: delete bridge_audit rows older
                                  than <days> (boot sweep, then every 6h).
-                                 Default: no pruning. Env:
+                                 Default: 30 — retention is always on so the
+                                 audit table cannot grow unbounded. Env:
                                  BRIDGE_REGISTRY_AUDIT_RETENTION_DAYS
   -h, --help                     Show this help
 
 Defaults (issue #48 hardening):
+  - The service binds 127.0.0.1 (loopback) unless --host is given explicitly;
+    any non-loopback bind prints a loud SECURITY WARNING to stderr first.
+  - Static tokens shorter than 32 characters (~128-bit entropy floor) warn
+    on stderr; --production-profile refuses to start with such tokens.
+  - Postgres audit retention is ON by default at 30 days (issue #120); the
+    flag/env above widens or narrows the window.
   - Rate limiting is ON with conservative buckets (auth: 120 capacity @
     30/s per IP; publish: 30 @ 5/s per principal). A boot log line says so.
   - A DSN without sslmode defaults to sslmode=prefer (TLS when the server
@@ -86,8 +102,41 @@ Publish:  curl -X PUT -H 'Authorization: Bearer dev-acme' \\
 /** Internal marker for command-line misuse (distinct from runtime errors). */
 class UsageError extends Error {}
 
+/**
+ * Default bind host (issue #120 item 6): loopback only. The service is a
+ * bearer-token-authenticated API with no built-in TLS; exposing it beyond
+ * this machine must be an explicit `--host` decision.
+ */
+export const DEFAULT_BIND_HOST = '127.0.0.1';
+
+/**
+ * True for loopback bind targets: `localhost`, the whole `127.0.0.0/8` range
+ * and `::1`. Anything else (0.0.0.0, `::`, LAN IPs, empty string) is a
+ * network-exposed bind.
+ */
+export function isLoopbackHost(host: string): boolean {
+  return host === 'localhost' || host === '::1' || host === '[::1]' || host.startsWith('127.');
+}
+
+/**
+ * Loud pre-bind warning for non-loopback binds (issue #120 item 6). Called
+ * right before `server.listen` so the operator sees the exposure decision in
+ * their terminal, not buried in a log file. Returns whether it warned.
+ */
+export function warnNonLoopbackBind(host: string | undefined): boolean {
+  if (host === undefined || isLoopbackHost(host)) return false;
+  process.stderr.write(
+    `[bridge-registry-service] SECURITY WARNING: binding to '${host}' exposes the registry ` +
+      'beyond this machine. The service authenticates with bearer tokens and has no built-in ' +
+      'TLS — terminate TLS in front of it and prefer --production-profile. ' +
+      '(Pass --host 127.0.0.1 to bind loopback only.)\n',
+  );
+  return true;
+}
+
 export interface Config {
   port: number;
+  /** Bind host. Defaults to {@link DEFAULT_BIND_HOST} (127.0.0.1, loopback). */
   host?: string;
   driver: 'memory' | 'postgres';
   pgDsn?: string;
@@ -97,7 +146,10 @@ export interface Config {
   signingOptional: boolean;
   productionProfile: boolean;
   auditFile?: string;
-  /** Audit retention window (postgres only); `undefined` disables pruning. */
+  /**
+   * Audit retention window in days (postgres only). `undefined` applies the
+   * postgres driver default (30 — issue #120 item 8); retention is always on.
+   */
   auditRetentionDays?: number;
 }
 
@@ -117,9 +169,13 @@ function envTokens(): Record<string, RegistryTokenInfo> {
   return out;
 }
 
-function parseArgs(argv: string[]): Config {
+/** Parse argv/env into a {@link Config} (exported for tests). */
+export function parseArgs(argv: string[]): Config {
   const config: Config = {
     port: Number(process.env['BRIDGE_REGISTRY_PORT'] ?? 4350),
+    // Loopback default (issue #120 item 6): an explicit --host is required to
+    // bind anything else, and even then the bind warns loudly first.
+    host: DEFAULT_BIND_HOST,
     driver: (process.env['BRIDGE_REGISTRY_DRIVER'] as Config['driver']) ?? 'memory',
     pgDsn: process.env['PG_DSN'],
     tokens: envTokens(),
@@ -260,6 +316,13 @@ export function productionProfileSsl(ssl: PgConnectOptions['ssl']): PgConnectOpt
 
 /** Build the service options from a parsed config (exported for tests). */
 export function buildOptions(config: Config): RegistryServiceOptions {
+  if (Object.keys(config.tokens).length > 0) {
+    // Token entropy floor (issue #120 item 7): the production profile
+    // hard-fails on short static tokens, the default profile warns. This is
+    // enforced HERE (startup, before anything binds) so the CLI and every
+    // programmatic path through the options builder gets the same guarantee.
+    assertTokenEntropy(config.tokens, { production: config.productionProfile });
+  }
   if (config.productionProfile) {
     // The production profile is only honest when signing is actually
     // enforced (issue #48): unsigned publishes must not be accepted. This is
@@ -287,7 +350,7 @@ export function buildOptions(config: Config): RegistryServiceOptions {
       Object.keys(config.signingKeys).length > 0
         ? { keys: config.signingKeys, mode: config.signingOptional ? 'optional' : 'required' }
         : undefined,
-    host: config.host,
+    host: config.host ?? DEFAULT_BIND_HOST,
   };
   if (config.productionProfile) {
     // Hardened defaults (issue #48): throttling on, signing required,
@@ -336,6 +399,9 @@ function run(argv: string[]): number {
         query: async (filter) => (driverBackend as { queryAudit(f: unknown): Promise<unknown[]> }).queryAudit(filter) as never,
       };
     }
+    // Issue #120 item 6: a non-loopback bind is always an explicit --host
+    // decision — say so loudly BEFORE the socket opens.
+    warnNonLoopbackBind(config.host);
     const server = start(options, config.port);
     server.on('error', (err) => {
       process.stderr.write(`bridge-registry-service: ${err.message}\n`);

@@ -23,13 +23,14 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { hashPackage } from '@bridge/core';
 import { diffPackages } from '@bridge/compat';
 import { RegistryError, splitPackageVersion } from '@bridge/registry';
-import { DriverAuditBackend, clampLimit } from './audit';
+import { AuthFailureAuditGate, DriverAuditBackend, clampLimit } from './audit';
 import { createAuthenticator, extractBearerToken, requireLevel } from './auth';
 import type { RequestAuthenticator } from './auth';
 import { Levels } from './auth';
 import { ServiceError, statusForRegistryError } from './errors';
 import { TokenBucketLimiter } from './ratelimit';
 import { MAX_CANONICAL_DEPTH, assertContentHash, effectiveSigningMode, verifyPublishSignature } from './signing';
+import type { PublishCoordinates } from './signing';
 import { assertContractName, assertIsoTimestamp, isPlainObject, validateIRPackage } from './validation';
 import { openApiDocument } from './openapi';
 import type {
@@ -51,6 +52,20 @@ interface Deps {
   limiter: TokenBucketLimiter;
   audit: AuditBackend;
   signing?: RegistryServiceOptions['signing'];
+  /** Audit-failure policy (issue #120): 'fail' rejects the request, 'best-effort' logs and continues. */
+  auditFailureMode: 'fail' | 'best-effort';
+  /** Per-IP cap on persisted failed-auth audit entries (issue #120). */
+  authFailureGate: AuthFailureAuditGate;
+}
+
+/**
+ * A response held back until the audit decision has been made (issue #120):
+ * in the default fail-closed audit mode no byte of a response may be
+ * written before the audit append for the request has succeeded.
+ */
+interface PendingResponse {
+  status: number;
+  body: string;
 }
 
 interface RequestContext {
@@ -68,6 +83,10 @@ interface RequestContext {
    * persisted to the audit log (pre-auth noise, rate-limited floods).
    */
   skipAudit: boolean;
+  /** Buffered response; written by `flush` after the audit decision. */
+  response: PendingResponse | null;
+  /** 413 follow-up: destroy the socket once the buffered response flushed. */
+  discardAfterFlush: boolean;
 }
 
 // ---------------------------------------------------------------- factories
@@ -111,7 +130,26 @@ export function createServer(options: RegistryServiceOptions): Server {
     );
   }
   const audit: AuditBackend = options.audit ?? new DriverAuditBackend(driver);
-  const deps: Deps = { driver, auth, limiter, audit, signing: options.signing };
+  // Audit-failure policy (issue #120): fail closed by default — a request
+  // whose audit append failed is answered with a 5xx envelope instead of
+  // silently going unaudited. 'best-effort' restores the legacy behavior.
+  const auditFailureMode = options.auditFailureMode ?? 'fail';
+  if (auditFailureMode !== 'fail' && auditFailureMode !== 'best-effort') {
+    throw new TypeError("createServer: options.auditFailureMode must be 'fail' or 'best-effort'");
+  }
+  // Auth-flood ring protection (issue #120): per-IP cap on persisted
+  // failed-auth audit entries (60s window, 20 entries) so a well-formed-
+  // bearer flood cannot evict legitimate history from the bounded ring.
+  const authFailureGate = new AuthFailureAuditGate();
+  const deps: Deps = {
+    driver,
+    auth,
+    limiter,
+    audit,
+    signing: options.signing,
+    auditFailureMode,
+    authFailureGate,
+  };
   const server = nodeCreateServer((req, res) => {
     void handle(req, res, deps);
   });
@@ -152,26 +190,37 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: Deps): Pr
     version: null,
     subject: null,
     skipAudit: false,
+    response: null,
+    discardAfterFlush: false,
   };
   res.on('error', () => {
     /* socket-level noise (client aborts) is not an application error */
   });
-  let status = 500;
   try {
-    status = await routeRequest(req, res, ctx, deps);
+    // The response is BUFFERED in `ctx.response`, never written inline: the
+    // audit decision below must happen first so that fail-closed auditing
+    // (issue #120) can replace an unaudited response with a 5xx envelope.
+    await routeRequest(req, res, ctx, deps);
   } catch (err) {
-    status = sendError(res, err);
-    if (status === 413) {
-      // 413 ordering (issue #48): the envelope is written FIRST (above),
+    ctx.response = errorResponse(err);
+    if (ctx.response.status === 413) {
+      // 413 ordering (issue #48): the envelope is flushed FIRST (below),
       // the connection is destroyed only after it has flushed.
-      discardOversizedRequest(req, res);
+      ctx.discardAfterFlush = true;
     }
   }
+  if (ctx.response === null) {
+    // Defensive: a routing path that neither responded nor threw.
+    ctx.response = errorResponse(new ServiceError(500, 'internal', 'internal error'));
+  }
+  let status = ctx.response.status;
+
   // One audit entry per /v1 request (success or failure), except for the
   // hygiene classes flagged in `ctx.skipAudit` (issue #48): rate-limited
   // floods and requests that never presented usable credentials must not
-  // evict legitimate history from the ring. Audit failures are logged and
-  // never fail the response.
+  // evict legitimate history from the ring. Fail-closed (issue #120): a
+  // failed append rejects the request with a 5xx envelope unless the
+  // operator opted into `auditFailureMode: 'best-effort'`.
   if (ctx.action !== null && !ctx.skipAudit) {
     const entry: AuditEntry = {
       time: startedAt.toISOString(),
@@ -185,12 +234,35 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: Deps): Pr
       status,
       ip: clientIp(req),
     };
-    try {
-      await deps.audit.append(entry);
-    } catch (err) {
-      console.error('audit append failed:', (err as Error).message);
+    // Ring protection (issue #120): a per-IP window cap bounds how many
+    // failed-auth entries one source can persist; excess entries are
+    // dropped (the 401 response itself is unaffected — they are redundant
+    // security noise from the same source).
+    const persistEntry =
+      entry.action !== 'auth' ||
+      entry.ok ||
+      deps.authFailureGate.allow(entry.ip ?? 'unknown');
+    if (persistEntry) {
+      try {
+        await deps.audit.append(entry);
+      } catch (err) {
+        if (deps.auditFailureMode === 'best-effort') {
+          console.error('audit.dropped', (err as Error).message);
+        } else {
+          ctx.response = errorResponse(
+            new ServiceError(
+              500,
+              'internal',
+              'audit append failed; the request is rejected because auditing is enforced (auditFailureMode=fail)',
+            ),
+          );
+          status = ctx.response.status;
+        }
+      }
     }
   }
+  flush(res, ctx.response);
+  if (ctx.discardAfterFlush) discardOversizedRequest(req, res);
 }
 
 async function routeRequest(
@@ -216,7 +288,7 @@ async function routeRequest(
   if (segments.length === 1 && segments[0] === 'healthz') {
     requireMethod(method, 'GET', '/healthz');
     ctx.action = null;
-    sendJson(res, 200, { ok: true });
+    sendJson(ctx, 200, { ok: true });
     return 200;
   }
 
@@ -245,7 +317,7 @@ async function routeRequest(
   if (segments.length === 2 && segments[1] === 'openapi.json') {
     requireMethod(method, 'GET', '/v1/openapi.json');
     ctx.action = null;
-    sendJson(res, 200, openApiDocument());
+    sendJson(ctx, 200, openApiDocument());
     return 200;
   }
 
@@ -280,7 +352,7 @@ async function routeRequest(
     ctx.org = principal.org;
     const query = (url.searchParams.get('q') ?? '').slice(0, 256);
     const results = await deps.driver.search(principal.org, null, query);
-    sendJson(res, 200, { query, results });
+    sendJson(ctx, 200, { query, results });
     return 200;
   }
 
@@ -316,7 +388,7 @@ async function routeRequest(
       to: withIsoParam(url, 'to'),
       limit: clampLimit(limitParam(url)),
     });
-    sendJson(res, 200, { entries });
+    sendJson(ctx, 200, { entries });
     return 200;
   }
 
@@ -340,7 +412,7 @@ async function routeRequest(
     requireMethod(method, 'GET', `/v1/orgs/${org}/projects/${project}`);
     requireLevel(principal, Levels.read);
     const contracts = await deps.driver.list(org, project);
-    sendJson(res, 200, { contracts });
+    sendJson(ctx, 200, { contracts });
     return 200;
   }
 
@@ -354,6 +426,7 @@ async function routeRequest(
     if (method === 'POST' || method === 'PUT') {
       ctx.action = 'publish';
       requireLevel(principal, Levels.publish);
+      requireJsonContentType(req);
       const body = await readJsonBody(req);
       const name = body['packageName'];
       if (typeof name !== 'string') {
@@ -361,11 +434,13 @@ async function routeRequest(
       }
       const contract = assertContractName(name);
       ctx.contract = splitPackageVersion(contract).base;
-      return publish(req, res, ctx, deps, org, project, contract, body);
+      // Project-scoped publish: the contract name comes from the BODY, so
+      // there is no URL contract to bind against (routeContract = null).
+      return publish(req, res, ctx, deps, org, project, contract, body, null);
     }
     requireMethod(method, 'GET', `/v1/orgs/${org}/projects/${project}/contracts`);
     const contracts = await deps.driver.list(org, project);
-    sendJson(res, 200, { contracts });
+    sendJson(ctx, 200, { contracts });
     return 200;
   }
 
@@ -376,8 +451,11 @@ async function routeRequest(
   if (tail.length === 2 && (method === 'PUT' || method === 'POST')) {
     ctx.action = 'publish';
     requireLevel(principal, Levels.publish);
+    requireJsonContentType(req);
     const body = await readJsonBody(req);
-    return publish(req, res, ctx, deps, org, project, contract, body);
+    // URL-embedded publish: the route contract is authoritative (issue #120)
+    // — publish() rejects a body that names a different contract.
+    return publish(req, res, ctx, deps, org, project, contract, body, contract);
   }
 
   requireMethod(method, 'GET', `/v1/orgs/${org}/projects/${project}/contracts/${contract}`);
@@ -391,7 +469,7 @@ async function routeRequest(
     const target = version ?? (await deps.driver.latest(org, project, base)).version;
     ctx.version = target;
     const { ir, meta } = await deps.driver.pull(org, project, base, target);
-    sendJson(res, 200, { ir, meta });
+    sendJson(ctx, 200, { ir, meta });
     return 200;
   }
 
@@ -400,7 +478,7 @@ async function routeRequest(
     requireLevel(principal, Levels.read);
     const base = splitPackageVersion(contract).base;
     const versions = await deps.driver.versions(org, project, base);
-    sendJson(res, 200, { contract: base, versions });
+    sendJson(ctx, 200, { contract: base, versions });
     return 200;
   }
 
@@ -411,7 +489,7 @@ async function routeRequest(
     const version = normalizeVersionParam(tail[3]!);
     ctx.version = version;
     const { ir, meta } = await deps.driver.pull(org, project, base, version);
-    sendJson(res, 200, { ir, meta });
+    sendJson(ctx, 200, { ir, meta });
     return 200;
   }
 
@@ -422,7 +500,7 @@ async function routeRequest(
     const version = normalizeVersionParam(tail[3]!);
     ctx.version = version;
     const consumers = await deps.driver.dependents(org, project, base);
-    sendJson(res, 200, { contract: base, version, consumers });
+    sendJson(ctx, 200, { contract: base, version, consumers });
     return 200;
   }
 
@@ -436,7 +514,7 @@ async function routeRequest(
     const oldIr = (await deps.driver.pull(org, project, base, from)).ir;
     const newIr = (await deps.driver.pull(org, project, base, to)).ir;
     const report = diffPackages(oldIr, newIr);
-    sendJson(res, 200, {
+    sendJson(ctx, 200, {
       contract: base,
       from,
       to,
@@ -459,7 +537,7 @@ async function routeRequest(
       ...deps_closure.map((name) => ({ name })),
     ];
     const edges = deps_closure.map((dep) => ({ from: meta.packageName, to: dep }));
-    sendJson(res, 200, { contract: base, version: meta.version, nodes, edges });
+    sendJson(ctx, 200, { contract: base, version: meta.version, nodes, edges });
     return 200;
   }
 
@@ -469,8 +547,15 @@ async function routeRequest(
 // ------------------------------------------------------------------ publish
 
 /**
- * Publish flow: signature verification → IR validation → content-hash
- * tripwire → driver publish (immutability enforced below the driver).
+ * Publish flow: signature verification → IR validation → route/body
+ * coordinate binding → content-hash tripwire → driver publish (immutability
+ * enforced below the driver).
+ *
+ * `routeContract` is the contract name embedded in the URL, or `null` for
+ * the project-scoped `POST .../contracts` form (where the name comes from
+ * the body). When set, the body must name THE SAME contract (issue #120):
+ * `body.packageName` (when present) and `ir.name` must both match, so a
+ * captured/rewritten payload cannot be published into a different slot.
  */
 async function publish(
   req: IncomingMessage,
@@ -481,6 +566,7 @@ async function publish(
   project: string,
   contract: string,
   body: unknown,
+  routeContract: string | null,
 ): Promise<number> {
   const ip = clientIp(req) ?? 'unknown';
   const publishDecision = deps.limiter.take('publish', `${ctx.subject ?? ''}|${ip}`);
@@ -489,9 +575,18 @@ async function publish(
     throw new ServiceError(429, 'rate-limited', 'publish rate limit exceeded');
   }
 
+  const routeParts = splitPackageVersion(contract);
   // Signature verification happens BEFORE any parsing of the payload so a
-  // tampered body can never reach storage.
-  verifyPublishSignature(body, req.headers, deps.signing);
+  // tampered body can never reach storage. The v2 envelope (issue #120)
+  // additionally binds the signature to these route coordinates; the legacy
+  // body-only format is still accepted (the CLI signs that way today).
+  const coordinates: PublishCoordinates = {
+    org,
+    project,
+    contract,
+    version: routeParts.version === '' ? null : routeParts.version,
+  };
+  verifyPublishSignature(body, req.headers, deps.signing, coordinates);
 
   if (!isPlainObject(body)) {
     throw new ServiceError(400, 'invalid_argument', 'request body must be a JSON object');
@@ -508,15 +603,22 @@ async function publish(
   }
   const ir = validated.ir;
 
+  // URL/body coordinate binding (issue #120): the URL contract name is
+  // authoritative for URL-embedded publishes.
+  if (routeContract !== null) {
+    assertNameMatchesRoute(body['packageName'], routeContract, 'body.packageName');
+    assertNameMatchesRoute(ir.name, routeContract, 'ir.name');
+  }
+
   const actualHash = hashWithDepthCap(ir);
   assertContentHash(body, actualHash);
 
-  const { base, version: embedded } = splitPackageVersion(contract);
+  const embedded = routeParts.version;
   const explicitVersion =
     typeof body['version'] === 'string' && body['version'].length > 0
       ? body['version']
       : undefined;
-  const version = embedded ?? explicitVersion ?? 'v1';
+  const version = embedded !== '' ? embedded : (explicitVersion ?? 'v1');
 
   const metaRaw = isPlainObject(body['meta']) ? body['meta'] : {};
   const meta: PublishMeta = {};
@@ -540,9 +642,14 @@ async function publish(
     publishedBy: ctx.subject ?? 'unknown',
   });
   ctx.version = result.meta.version;
+  // Audit truth (issue #120): the contract field of the audit entry comes
+  // from the STORED meta (derived from ir.name), never from the URL or the
+  // body-declared package name, so the log reflects what was actually
+  // persisted.
+  ctx.contract = result.meta.base;
 
   const status = result.outcome === 'created' ? 201 : 200;
-  sendJson(res, status, { outcome: result.outcome, meta: result.meta });
+  sendJson(ctx, status, { outcome: result.outcome, meta: result.meta });
   return status;
 }
 
@@ -590,6 +697,48 @@ export function normalizeLanguages(raw: unknown): string[] | undefined {
 
 function clientIp(req: IncomingMessage): string | null {
   return req.socket.remoteAddress ?? null;
+}
+
+/**
+ * Body-consuming routes (publish) must declare a JSON content type
+ * (issue #120): a body sent as `text/plain` or with no Content-Type at all
+ * is rejected with 415 before parsing. Media-type parameters
+ * (`application/json; charset=utf-8`) are accepted.
+ */
+function requireJsonContentType(req: IncomingMessage): void {
+  const raw = req.headers['content-type'];
+  const mediaType = typeof raw === 'string' ? raw.split(';')[0]!.trim().toLowerCase() : '';
+  if (mediaType !== 'application/json') {
+    throw new ServiceError(
+      415,
+      'invalid_argument',
+      `publish requires Content-Type: application/json (got ${
+        typeof raw === 'string' && raw.length > 0 ? `'${mediaType}'` : 'no Content-Type'
+      })`,
+    );
+  }
+}
+
+/**
+ * URL/body coordinate binding (issue #120): `name` (a body-declared package
+ * name or the validated `ir.name`) must denote the SAME contract as the
+ * URL-embedded route name: same base, and — when the route embeds a version
+ * segment — the same (normalized) version. Versionless route names accept
+ * any version the body resolves to.
+ */
+function assertNameMatchesRoute(name: unknown, routeContract: string, field: string): void {
+  if (typeof name !== 'string') return; // body.packageName is optional on URL-embedded routes
+  const route = splitPackageVersion(routeContract);
+  const candidate = splitPackageVersion(name);
+  const versionMismatch = route.version !== '' && candidate.version !== route.version;
+  if (candidate.base !== route.base || versionMismatch) {
+    throw new ServiceError(
+      400,
+      'invalid_argument',
+      `${field} '${name}' does not match the URL contract '${routeContract}': the publish route is ` +
+        'authoritative, and publishing under a mismatched name is rejected (coordinate binding)',
+    );
+  }
 }
 
 /** True when the Authorization header carries a well-formed bearer token. */
@@ -722,20 +871,20 @@ async function readRawBody(req: IncomingMessage): Promise<Buffer> {
   });
 }
 
-function sendJson(res: ServerResponse, status: number, payload: unknown): void {
-  const body = JSON.stringify(payload);
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(body),
-  });
-  res.end(body);
+/** Buffer a success response on the request context (flushed after audit). */
+function sendJson(ctx: RequestContext, status: number, payload: unknown): void {
+  if (ctx.response !== null) {
+    throw new ServiceError(500, 'internal', 'internal error: response already produced for this request');
+  }
+  ctx.response = { status, body: JSON.stringify(payload) };
 }
 
-function sendError(res: ServerResponse, err: unknown): number {
-  if (res.headersSent) {
-    res.destroy();
-    return 500;
-  }
+/**
+ * Build the error envelope for `err` WITHOUT writing it (issue #120): the
+ * response is flushed only after the audit decision. Unknown failures
+ * never leak internals.
+ */
+function errorResponse(err: unknown): PendingResponse {
   let status = 500;
   let code: string = 'internal';
   let message = 'internal error';
@@ -752,7 +901,6 @@ function sendError(res: ServerResponse, err: unknown): number {
     message = err.message;
     if (status >= 500) message = 'storage error';
   } else {
-    // Unknown failures never leak internals.
     console.error('registry-service internal error:', err);
   }
 
@@ -760,11 +908,25 @@ function sendError(res: ServerResponse, err: unknown): number {
   if (details !== undefined) {
     (envelope['error'] as Record<string, unknown>)['details'] = details;
   }
-  const body = JSON.stringify(envelope);
-  res.writeHead(status, {
+  return { status, body: JSON.stringify(envelope) };
+}
+
+/**
+ * Write the buffered response. THE single writeHead for every response the
+ * service produces (successes and error envelopes alike), which is where
+ * the security headers live (issue #120): `X-Content-Type-Options: nosniff`
+ * and `Cache-Control: no-store` on everything, no exceptions.
+ */
+function flush(res: ServerResponse, pending: PendingResponse): void {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  res.writeHead(pending.status, {
     'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(body),
+    'content-length': Buffer.byteLength(pending.body),
+    'x-content-type-options': 'nosniff',
+    'cache-control': 'no-store',
   });
-  res.end(body);
-  return status;
+  res.end(pending.body);
 }

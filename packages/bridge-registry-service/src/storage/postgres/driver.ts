@@ -49,13 +49,23 @@ export interface PostgresDriverOptions {
   migrationsDir?: string;
   connectionTimeoutMs?: number;
   /**
-   * Audit retention in days (issue #48): `bridge_audit` rows older than the
-   * cutoff are deleted at boot and then swept every {@link RETENTION_SWEEP_INTERVAL_MS}.
-   * `undefined` disables pruning (the table grows unbounded — not recommended
-   * for long-lived deployments).
+   * Audit retention in days (issue #120 item 8): `bridge_audit` rows older
+   * than the cutoff are deleted at boot and then swept every
+   * {@link RETENTION_SWEEP_INTERVAL_MS}. Defaults to
+   * {@link DEFAULT_AUDIT_RETENTION_DAYS} (30) — retention is ALWAYS on so the
+   * audit table cannot grow unbounded; pass an explicit integer ≥ 1 to widen
+   * or narrow the window. There is no off switch by design.
    */
   auditRetentionDays?: number;
 }
+
+/**
+ * Default audit-retention window in days (issue #120 item 8): the postgres
+ * driver prunes `bridge_audit` rows older than 30 days by default. Override
+ * via `PostgresDriverOptions.auditRetentionDays` (CLI:
+ * `--audit-retention-days <days>` / `BRIDGE_REGISTRY_AUDIT_RETENTION_DAYS`).
+ */
+export const DEFAULT_AUDIT_RETENTION_DAYS = 30;
 
 /** How often the retention sweep re-runs while the process is up. */
 export const RETENTION_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -73,7 +83,8 @@ export class PostgresDriver implements StorageDriver {
   public readonly kind = 'postgres' as const;
   private readonly connectOptions: PgConnectOptions;
   private readonly migrationsDir: string;
-  private readonly auditRetentionDays: number | undefined;
+  /** Effective retention window in days; always set (see {@link auditRetentionDays}). */
+  private readonly retentionDays: number;
   private client: PgClient | null = null;
   private connecting: Promise<PgClient> | null = null;
   private retentionTimer: NodeJS.Timeout | null = null;
@@ -99,7 +110,14 @@ export class PostgresDriver implements StorageDriver {
         throw new TypeError('PostgresDriver: auditRetentionDays must be an integer >= 1');
       }
     }
-    this.auditRetentionDays = opts.auditRetentionDays;
+    // Retention defaults ON (issue #120 item 8): an unbounded audit table is
+    // the defect, so `undefined` means the documented 30-day default, not off.
+    this.retentionDays = opts.auditRetentionDays ?? DEFAULT_AUDIT_RETENTION_DAYS;
+  }
+
+  /** Effective audit-retention window in days (default {@link DEFAULT_AUDIT_RETENTION_DAYS}). */
+  public get auditRetentionDays(): number {
+    return this.retentionDays;
   }
 
   /** Lazily open (or reuse) the single connection used by the driver. */
@@ -140,23 +158,26 @@ export class PostgresDriver implements StorageDriver {
         /* connection may already be gone — session locks die with it */
       }
     }
-    if (this.auditRetentionDays !== undefined) {
-      // Retention (issue #48): a first sweep right after boot, then a
-      // periodic one for long-lived processes. Never fails the boot.
-      try {
-        const deleted = await this.pruneAudit();
-        if (deleted > 0) console.log(`[bridge-registry-service] audit retention: pruned ${deleted} row(s) older than ${this.auditRetentionDays}d`);
-      } catch (err) {
-        console.error(`[bridge-registry-service] audit retention sweep failed: ${(err as Error).message}`);
-      }
-      if (this.retentionTimer === null) {
-        this.retentionTimer = setInterval(() => {
-          this.pruneAudit().catch((err: unknown) => {
-            console.error(`[bridge-registry-service] audit retention sweep failed: ${(err as Error).message}`);
-          });
-        }, RETENTION_SWEEP_INTERVAL_MS);
-        this.retentionTimer.unref();
-      }
+    // Retention (issue #120 item 8): a first sweep right after boot, then a
+    // periodic one for long-lived processes. Always active — the window
+    // defaults to DEFAULT_AUDIT_RETENTION_DAYS (30). Never fails the boot.
+    try {
+      console.log(
+        `[bridge-registry-service] postgres audit retention: pruning bridge_audit rows older than ` +
+          `${this.retentionDays}d (boot sweep, then every 6h; override with --audit-retention-days)`,
+      );
+      const deleted = await this.pruneAudit();
+      if (deleted > 0) console.log(`[bridge-registry-service] audit retention: pruned ${deleted} row(s) older than ${this.retentionDays}d`);
+    } catch (err) {
+      console.error(`[bridge-registry-service] audit retention sweep failed: ${(err as Error).message}`);
+    }
+    if (this.retentionTimer === null) {
+      this.retentionTimer = setInterval(() => {
+        this.pruneAudit().catch((err: unknown) => {
+          console.error(`[bridge-registry-service] audit retention sweep failed: ${(err as Error).message}`);
+        });
+      }, RETENTION_SWEEP_INTERVAL_MS);
+      this.retentionTimer.unref();
     }
   }
 
@@ -203,15 +224,11 @@ export class PostgresDriver implements StorageDriver {
   }
 
   /**
-   * Delete audit rows older than `auditRetentionDays` (issue #48 retention).
-   * Returns the number of rows deleted. Throws when no retention window is
-   * configured.
+   * Delete audit rows older than the effective retention window (issue #120
+   * item 8). Returns the number of rows deleted.
    */
   public async pruneAudit(): Promise<number> {
-    if (this.auditRetentionDays === undefined) {
-      throw new TypeError('PostgresDriver: pruneAudit() requires auditRetentionDays to be configured');
-    }
-    const cutoff = new Date(Date.now() - this.auditRetentionDays * 86_400_000).toISOString();
+    const cutoff = new Date(Date.now() - this.retentionDays * 86_400_000).toISOString();
     const client = await this.conn();
     // `time` is ISO-8601 UTC text — lexicographic comparison is chronological
     // (see 0001_init.sql), same convention the audit query filters use.
