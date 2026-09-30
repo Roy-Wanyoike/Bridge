@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs (built inside the image)
+**/dist/
+**/*.tsbuildinfo
+dashboard/.next/
+dashboard/out/
+
+# Environment & secrets - never in the build context
+.env
+.env.*
+!.env.example
+
+# Git & CI
+.git/
+.github/
+
+# Local state, tooling and workspace artifacts
+tool-results/
+worktrees/
+db/
+skills/
+download/
+upload/
+*.log
+logs/
+coverage/
+.bridge-cache/
+bridge.lock
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
