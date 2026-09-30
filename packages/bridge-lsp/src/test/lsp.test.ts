@@ -121,6 +121,11 @@ class TestClient {
     });
   }
 
+  /** How many notifications with exactly this method have arrived so far. */
+  countNotifications(method: string): number {
+    return this.queuedNotifications.filter((n) => n.method === method).length;
+  }
+
   async initialize(): Promise<JsonRpcMessage> {
     const response = await this.request(Methods.Initialize, { capabilities: {} });
     this.notify(Methods.Initialized);
@@ -248,6 +253,29 @@ test('MessageReader reports a framing error when Content-Length is missing', () 
   );
   reader.push(Buffer.from('X-Nothing: 1\r\n\r\n', 'ascii'));
   assert.deepEqual(errors, ['framing']);
+});
+
+test('MessageReader rejects a DECLARED oversized body before buffering a single byte', () => {
+  const received: JsonRpcMessage[] = [];
+  const errors: Array<{ kind: string; cause: unknown }> = [];
+  const reader = new MessageReader(
+    (message) => received.push(message),
+    (kind, cause) => errors.push({ kind, cause }),
+  );
+  // Declare a 200MB body but only write the header and a tiny tail: the
+  // reader must react to the DECLARED size, not wait for the body to arrive.
+  reader.push(Buffer.from('Content-Length: 209715200\r\n\r\n', 'ascii'));
+  reader.push(Buffer.from('{ "jsonrpc"', 'ascii'));
+  assert.equal(received.length, 0, 'no message may be delivered');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.kind, 'limit');
+  assert.match(String(errors[0]?.cause), /Content-Length 209715200 exceeds/);
+  // Later bytes neither deliver a message nor re-trigger the limit — the
+  // rejected frame was dropped wholesale (the connection treats the stream
+  // as unrecoverable and stops; see the connection-level test below).
+  reader.push(Buffer.from('trailing bytes', 'ascii'));
+  assert.equal(received.length, 0);
+  assert.equal(errors.length, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -455,6 +483,21 @@ test('textDocument/diagnostic (pull) returns a full report', async () => {
   }
 });
 
+test('pull diagnostics for a never-opened document is an InvalidParams error, not an empty report', async () => {
+  const client = new TestClient();
+  try {
+    await client.initialize();
+    const response = await client.request(Methods.DocumentDiagnostic, {
+      textDocument: { uri: 'file:///work/never-opened.bridge' },
+    });
+    assert.equal(response.result, undefined, 'an empty full report would masquerade as a clean document');
+    assert.equal(response.error?.code, ErrorCodes.InvalidParams);
+    assert.match(response.error?.message ?? '', /not open/);
+  } finally {
+    client.stop();
+  }
+});
+
 test('hover on a known type returns markdown with the full declaration', async () => {
   const client = new TestClient();
   try {
@@ -608,6 +651,78 @@ test('shutdown answers null, blocks further requests, and exit reports code 0', 
     client.notify(Methods.Exit);
     assert.equal(await client.exited, 0);
   } finally {
+    client.stop();
+  }
+});
+
+test('after shutdown, textDocument/* notifications are ignored: no publishDiagnostics', async () => {
+  const client = new TestClient();
+  try {
+    await client.initialize();
+    const shutdown = await client.request(Methods.Shutdown);
+    assert.equal(shutdown.result, null);
+
+    client.open(URI, BROKEN_DOC); // must be ignored, not compiled
+    // Stream ordering proves the negative: a (forbidden) publishDiagnostics
+    // notification would have been written BEFORE this response arrives.
+    const response = await client.request(Methods.Hover, {
+      textDocument: { uri: URI },
+      position: { line: 0, character: 0 },
+    });
+    assert.equal(response.error?.code, ErrorCodes.InvalidRequest);
+    assert.equal(client.countNotifications(Methods.PublishDiagnostics), 0);
+
+    // Exit stays clean: the server still distinguishes shutdown from crash.
+    client.notify(Methods.Exit);
+    assert.equal(await client.exited, 0);
+  } finally {
+    client.stop();
+  }
+});
+
+test('an oversized declared body answers InvalidRequest and stops with exit code 1', async () => {
+  const client = new TestClient();
+  try {
+    const raw: Buffer[] = [];
+    client.fromServer.on('data', (chunk: Buffer) => raw.push(chunk));
+    await client.initialize();
+    // Declared 200MB, actual write tiny — the connection must refuse on the
+    // DECLARED size, answer with an error envelope, and stop without
+    // buffering the body.
+    client.toServer.write(Buffer.from('Content-Length: 209715200\r\n\r\n', 'ascii'));
+    client.toServer.write(Buffer.from('{ "jsonrpc"', 'ascii'));
+    assert.equal(await client.exited, 1);
+    const text = Buffer.concat(raw).toString('utf8');
+    assert.match(text, /"code":-32600/);
+    assert.match(text, /Content-Length 209715200 exceeds/);
+  } finally {
+    client.stop();
+  }
+});
+
+test('garbage past the 32 KiB header cap answers ParseError, logs to stderr, exits 1', async () => {
+  const realStderrWrite = process.stderr.write.bind(process.stderr);
+  const stderrSeen: string[] = [];
+  process.stderr.write = ((chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+    stderrSeen.push(String(chunk));
+    return (realStderrWrite as (...args: unknown[]) => boolean)(chunk, ...rest);
+  }) as typeof process.stderr.write;
+  const client = new TestClient();
+  try {
+    const raw: Buffer[] = [];
+    client.fromServer.on('data', (chunk: Buffer) => raw.push(chunk));
+    await client.initialize();
+    client.toServer.write(Buffer.alloc(40 * 1024, 0x41)); // 40 KiB, no header terminator
+    assert.equal(await client.exited, 1);
+    const text = Buffer.concat(raw).toString('utf8');
+    assert.match(text, /"code":-32700/);
+    assert.match(text, /Framing error/);
+    assert.ok(
+      stderrSeen.some((line) => line.includes('Framing error') || line.includes('stopping')),
+      `expected a stderr log line, got ${JSON.stringify(stderrSeen)}`,
+    );
+  } finally {
+    process.stderr.write = realStderrWrite;
     client.stop();
   }
 });

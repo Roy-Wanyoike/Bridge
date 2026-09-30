@@ -40,20 +40,23 @@ export function run(args: ParsedArgs): void {
   }
 
   const targets = [...generated.keys()].sort();
-  const existing = targets.filter((t) => fs.existsSync(t));
-  if (existing.length > 0 && !force) {
-    throw new CliError(
-      `refusing to overwrite ${existing.length} existing file(s) — use --force to overwrite:\n` +
-      existing.map((t) => `  ${t}`).join('\n'),
-    );
-  }
 
+  // Exclusive-create writes ('wx', unless --force) make the no-overwrite
+  // guarantee race-free: the kernel refuses if a target appears between the
+  // check and the write. EEXIST maps to the same friendly error the old
+  // existsSync sweep produced.
   try {
     for (const [target, content] of generated) {
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, content, 'utf8');
+      fs.writeFileSync(target, content, { encoding: 'utf8', flag: force ? 'w' : 'wx' });
     }
   } catch (e) {
+    if (!force && (e as NodeJS.ErrnoException | null)?.code === 'EEXIST') {
+      throw new CliError(
+        `refusing to overwrite 1 existing file(s) — use --force to overwrite:\n` +
+        `  ${(e as NodeJS.ErrnoException).path ?? '?'}`,
+      );
+    }
     throw new CliError(`cannot write generated files: ${e instanceof Error ? e.message : String(e)}`);
   }
 

@@ -58,18 +58,28 @@ export function run(args: ParsedArgs): void {
     checks.push({ ok: false, detail: `generator skipped (compiler failed)` });
   }
 
-  // 5. Registry directory: existence + writability.
+  // 5. Registry directory: existence + writability. statSync can still fail
+  // after existsSync (the path may vanish or change mid-check), so it is
+  // wrapped — a doctor diagnostic must never surface as a raw stack trace.
   const root = registryDir(args);
   if (!fs.existsSync(root)) {
     checks.push({ ok: true, detail: `registry ${root} (absent — created on first publish)` });
-  } else if (!fs.statSync(root).isDirectory()) {
-    checks.push({ ok: false, detail: `registry ${root} exists but is not a directory` });
   } else {
-    const writable = checkWritable(root);
-    checks.push({
-      ok: writable === true,
-      detail: `registry ${root} (${writable === true ? 'writable' : `not writable: ${writable}`})`,
-    });
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(root);
+    } catch (e) {
+      throw new CliError(`cannot inspect registry ${root}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (!stat.isDirectory()) {
+      checks.push({ ok: false, detail: `registry ${root} exists but is not a directory` });
+    } else {
+      const writable = checkWritable(root);
+      checks.push({
+        ok: writable === true,
+        detail: `registry ${root} (${writable === true ? 'writable' : `not writable: ${writable}`})`,
+      });
+    }
   }
 
   for (const check of checks) {

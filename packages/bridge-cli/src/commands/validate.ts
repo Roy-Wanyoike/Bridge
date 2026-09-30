@@ -1,11 +1,10 @@
 /**
  * `bridge validate [files...]` — compile contracts and report diagnostics.
  */
-import * as fs from 'node:fs';
 import { compileSource, formatDiagnostics, shortHash } from '@bridge/core';
 import { ParsedArgs } from '../args';
-import { inputFiles } from '../files';
-import { CliError } from '../errors';
+import { inputFiles, readText } from '../files';
+import { CliError, describeError } from '../errors';
 import { errOut, out, CHECK, printJson } from '../output';
 
 interface ValidateResultJson {
@@ -25,17 +24,19 @@ export function run(args: ParsedArgs): void {
   for (const file of files) {
     let text: string;
     try {
-      text = fs.readFileSync(file, 'utf8');
+      text = readText(file);
     } catch (e) {
       // One JSON entry per input file, even when it cannot be read — CI
       // consumers parse the array instead of losing it to an early abort.
+      // readText raises plain CliErrors (missing file, invalid UTF-8, …).
       failures++;
+      const message = e instanceof CliError ? e.message : `cannot read ${file}: ${describeError(e)}`;
       results.push({
         file,
         ok: false,
-        diagnostics: [{ severity: 'error', message: readFailure(file, e) }],
+        diagnostics: [{ severity: 'error', message }],
       });
-      if (!json) errOut(readFailure(file, e));
+      if (!json) errOut(message);
       continue;
     }
     const result = compileSource(text, file);
@@ -65,11 +66,4 @@ export function run(args: ParsedArgs): void {
   if (failures > 0) {
     throw new CliError(`${failures} of ${files.length} file(s) failed validation`);
   }
-}
-
-function readFailure(file: string, e: unknown): string {
-  const code = (e as NodeJS.ErrnoException | null)?.code;
-  if (code === 'ENOENT') return `file not found: ${file}`;
-  if (code === 'EISDIR') return `${file} is a directory, not a file`;
-  return `cannot read ${file}: ${e instanceof Error ? e.message : String(e)}`;
 }

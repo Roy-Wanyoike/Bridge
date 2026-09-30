@@ -63,20 +63,31 @@ export function isResponse(message: JsonRpcMessage): boolean {
 const MAX_HEADER_BYTES = 32 * 1024;
 
 /**
+ * Maximum accepted message body, enforced on the DECLARED `Content-Length`
+ * before a single body byte is buffered. The protocol itself has no size
+ * limit, but a hostile or buggy client may declare gigabytes and stream a
+ * body indefinitely — buffering it grows RSS without bound (a 128MB stream
+ * was measured at ~290MB RSS). Real Bridge contracts stay far below 64 MiB,
+ * so anything above the cap is treated as a framing failure: the reader
+ * refuses the message and the connection's error path takes over.
+ */
+export const MAX_BODY_BYTES = 64 * 1024 * 1024;
+
+/**
  * Incremental reader for framed JSON-RPC messages.
  *
  * Feed it raw stream chunks with {@link push}; it reassembles headers and
  * bodies across chunk boundaries and invokes `onMessage` once per complete
- * message. The reader never throws: framing corruption and bodies that fail
- * `JSON.parse` are reported through the optional `onError` callback so the
- * transport can decide how to recover.
+ * message. The reader never throws: framing corruption, oversized declared
+ * bodies and payloads that fail `JSON.parse` are reported through the
+ * optional `onError` callback so the transport can decide how to recover.
  */
 export class MessageReader {
   private buffer: Buffer = Buffer.alloc(0);
 
   constructor(
     private readonly onMessage: (message: JsonRpcMessage) => void,
-    private readonly onError?: (kind: 'framing' | 'parse', cause: unknown) => void,
+    private readonly onError?: (kind: 'framing' | 'parse' | 'limit', cause: unknown) => void,
   ) {}
 
   /** Feed the next chunk from the byte stream. */
@@ -111,6 +122,18 @@ export class MessageReader {
       if (contentLength < 0) {
         this.buffer = Buffer.alloc(0);
         this.onError?.('framing', 'Framing error: missing or invalid Content-Length header.');
+        return;
+      }
+
+      // Enforce the body cap on the DECLARED size — before any body byte is
+      // buffered. Dropping the already-received bytes keeps memory flat no
+      // matter how much of the oversized body follows.
+      if (contentLength > MAX_BODY_BYTES) {
+        this.buffer = Buffer.alloc(0);
+        this.onError?.(
+          'limit',
+          `Content-Length ${contentLength} exceeds the ${MAX_BODY_BYTES}-byte message limit.`,
+        );
         return;
       }
 

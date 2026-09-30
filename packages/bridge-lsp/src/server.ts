@@ -11,7 +11,8 @@
  * - `initialize` → capabilities response; requests before it are answered
  *   with `ServerNotInitialized`, notifications before it are dropped.
  * - `initialized` → no-op.
- * - `shutdown` → `null` result; further requests get `InvalidRequest`.
+ * - `shutdown` → `null` result; further requests get `InvalidRequest` and
+ *   textDocument/* notifications are ignored (LSP 3.17 shutdown discipline).
  * - `exit` → invokes the exit handler with 0 after `shutdown`, 1 otherwise.
  * - `$/cancelNotification` and other `$/…` notifications are accepted and
  *   ignored (v1: requests are synchronous and not cancellable).
@@ -173,6 +174,7 @@ export class BridgeLspServer {
     if (method === Methods.Initialized) return; // no dynamic registrations in v1
     if (method.startsWith('$/')) return; // optional notifications ($/cancelNotification, $/setTrace, …) are ignored
     if (!this.initialized) return; // drop notifications before `initialize`, per spec
+    if (this.shutdownRequested) return; // LSP: after `shutdown`, notifications are ignored until `exit`
 
     switch (method) {
       case Methods.DidOpen:
@@ -396,8 +398,19 @@ export class BridgeLspServer {
       return this.respondError(id, ErrorCodes.InvalidParams, 'Invalid params: expected { textDocument: { uri } }.');
     }
     const doc = this.documents.get(parsed.textDocument.uri);
-    const result = doc === undefined ? undefined : this.compile(doc.uri, doc.text);
-    const items = result === undefined ? [] : result.diagnostics.map((d) => toLspDiagnostic(doc?.text ?? '', d));
+    if (doc === undefined) {
+      // Pull diagnostics only cover documents this server tracks — an unopened
+      // URI must not silently masquerade as a clean document (an empty full
+      // report would tell the editor there are no problems).
+      return this.respondError(
+        id,
+        ErrorCodes.InvalidParams,
+        `Invalid params: document '${parsed.textDocument.uri}' is not open — ` +
+          'textDocument/diagnostic only answers documents opened via textDocument/didOpen.',
+      );
+    }
+    const result = this.compile(doc.uri, doc.text);
+    const items = result.diagnostics.map((d) => toLspDiagnostic(doc.text, d));
     const report: DocumentDiagnosticReport = { kind: 'full', items };
     this.respond(id, report);
   }
