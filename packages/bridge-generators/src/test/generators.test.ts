@@ -1,6 +1,9 @@
 /**
  * Generator test suite: per-language structure, determinism, and
- * executable-output verification (Python ast.parse, TS transpile).
+ * executable-output verification (Python ast.parse + import; TypeScript is
+ * type-checked as a FULL ts.Program — see ts-program-check.ts, issue #118).
+ * Byte-level snapshots live in snapshots.test.ts; adversarial compile gates
+ * in adversarial-compile-gates.test.ts.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,6 +14,7 @@ import { join } from 'node:path';
 
 import { generate, GENERATOR_VERSION } from '../index';
 import { makePaymentsIR, makeMinimalIR, makeAdversarialIR } from './fixtures';
+import { typeCheckGenerated, formatDiagnostics } from './ts-program-check';
 import type { GeneratedFile } from '../gen/input';
 
 const ir = makePaymentsIR();
@@ -194,29 +198,59 @@ print("PY-OK")
   }
 });
 
-test('TypeScript: generated code transpiles with zero errors', () => {
-  // typescript is available as a devDependency of the monorepo
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const ts = require('typescript') as typeof import('typescript');
-  const files = generate(ir, { language: 'typescript' });
-  for (const file of files) {
-    if (!file.path.endsWith('.ts')) continue;
-    const result = ts.transpileModule(file.content, {
-      compilerOptions: { target: ts.ScriptTarget.ES2022, strict: true },
-      reportDiagnostics: true,
-      fileName: file.path,
-    });
-    const errors = (result.diagnostics ?? []).filter(
-      (d) => d.category === ts.DiagnosticCategory.Error,
-    );
-    assert.equal(
-      errors.length,
-      0,
-      `${file.path}: ${errors
-        .map((d) => ts.flattenDiagnosticMessageText(d.messageText, ' '))
-        .join('; ')}`,
-    );
-  }
+test('TypeScript: generated package type-checks as a full Program with zero diagnostics', () => {
+  // Issue #118: the previous check used ts.transpileModule, which is
+  // SYNTAX-ONLY — no semantic analysis, one file at a time — so duplicate
+  // identifiers, unresolved names and type errors passed silently. This
+  // runs a full ts.createProgram over the emitted module graph via an
+  // in-memory compiler host; see ts-program-check.ts for the exact options
+  // (lib es2020 + dom, strict) and the coverage statement.
+  const diagnostics = typeCheckGenerated(generate(ir, { language: 'typescript' }));
+  assert.equal(
+    diagnostics.length,
+    0,
+    `generated TypeScript must type-check with zero diagnostics;\n${formatDiagnostics(diagnostics)}`,
+  );
+});
+
+test('TypeScript: the Program check surfaces errors transpileModule cannot see', () => {
+  // Prove the gate is semantic, not syntactic: inject errors that
+  // transpileModule accepted silently and assert the exact TS codes fire.
+  const base = generate(ir, { language: 'typescript' });
+  const patch = (path: string, extra: string): GeneratedFile[] =>
+    base.map((f) => (f.path === path ? { ...f, content: `${f.content}\n${extra}` } : f));
+
+  // TS2300: duplicate identifier — two class declarations in one module
+  // (class + interface would legally merge, two classes must not).
+  const duplicate = typeCheckGenerated(
+    patch('src/types.ts', 'export class Money {}\nexport class Money {}'),
+  );
+  assert.ok(
+    duplicate.some((d) => d.code === 2300),
+    `expected TS2300 duplicate-identifier; got:\n${formatDiagnostics(duplicate)}`,
+  );
+
+  // TS2304: cannot find name — a reference to an undeclared identifier.
+  const unresolved = typeCheckGenerated(
+    patch('src/validate.ts', 'export const __bridge_probe: number = notDefinedAnywhere;'),
+  );
+  assert.ok(
+    unresolved.some((d) => d.code === 2304),
+    `expected TS2304 cannot-find-name; got:\n${formatDiagnostics(unresolved)}`,
+  );
+
+  // TS2322: a plain type error across the emitted surface.
+  const mismatch = typeCheckGenerated(
+    patch('src/types.ts', 'export const __bridge_probe: number = "not a number";'),
+  );
+  assert.ok(
+    mismatch.some((d) => d.code === 2322),
+    `expected TS2322 type-mismatch; got:\n${formatDiagnostics(mismatch)}`,
+  );
+
+  // Baseline sanity: pristine output is clean — the injections above are
+  // what the gate catches, not pre-existing noise.
+  assert.equal(typeCheckGenerated(base).length, 0);
 });
 
 test('Go: braces balance in every file', () => {
@@ -293,9 +327,11 @@ test('Java: expected file list and structure', () => {
   // Optional primitives use boxed Optional types.
   const orderLine = byPath(files, 'src/main/java/bridge/payments/v1/OrderLine.java');
   assert.match(orderLine.content, /Optional<Double> weightKg;/);
-  // Sets sort for deterministic wire output.
+  // Sets sort for deterministic wire output: canonical set order (#117) —
+  // this field is a set<string>, so strings order by Unicode code point
+  // (BridgeJson.compareUtf8), not Java's UTF-16 natural ordering.
   const order = byPath(files, 'src/main/java/bridge/payments/v1/Order.java');
-  assert.match(order.content, /Collections\.sort/);
+  assert.match(order.content, /BridgeJson::compareUtf8/);
   // Wire names stay snake_case.
   assert.match(payment.content, /out\.put\("customer_email", /);
   // Reserved-word escape: `type` field becomes type_ member, wire name kept.
@@ -515,10 +551,13 @@ test('adversarial: go union zero values resolve primitive aliases', () => {
   assert.ok(!/OrderRef\{\}/.test(text), 'composite literal on an alias-to-primitive type');
 });
 
-test('adversarial: csharp set serialization projects elements before sorting', () => {
+test('adversarial: csharp set serialization stays compilable and orders canonically', () => {
   const text = advText('csharp');
+  // Issue #116: a StringComparer applied directly to a non-string element
+  // type does not compile. Issue #117: numeric/bool sets now order
+  // naturally (canonical set order) instead of via a string projection.
   assert.ok(!/OrderBy\(x => x, StringComparer/.test(text), 'unprojected OrderBy on non-string sets');
-  assert.ok(/OrderBy\(x => x\?\.ToString\(\)/.test(text), 'projected OrderBy expected');
+  assert.ok(/OrderBy\(x => x\)/.test(text), 'natural numeric/bool set ordering expected');
 });
 
 test('adversarial: every language generates without throwing for all cases', () => {
