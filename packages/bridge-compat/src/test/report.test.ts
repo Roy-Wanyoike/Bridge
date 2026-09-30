@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { check, diffPackages, formatReport, toJson } from '../index';
 import type { CompatReport, IRPackage } from '../index';
-import { constraint, enumType, field, makeIr, prim, struct } from './fixtures';
+import { constraint, enumType, field, makeIr, prim, service, struct } from './fixtures';
 
 // ---------------------------------------------------------------------------
 // Fixtures for this suite
@@ -185,13 +185,37 @@ test('formatReport prints PASSED for an empty (SAFE) report', () => {
 
 test('formatReport keeps breaking lines first and path-sorted within groups', () => {
   const oldIr = makeIr();
-  const newIr = makeIr({ services: [] }); // removes the only method
+  const newIr = makeIr({ services: [] }); // removes the service and its only method
   const text = formatReport(diffPackages(oldIr, newIr));
   const breakingLines = text
     .split('\n')
     .filter((l) => l.startsWith('❌'))
     .map((l) => l.replace('❌ Breaking: ', ''));
-  assert.deepEqual(breakingLines, ['Method removed: Payments.CreatePayment']);
+  assert.deepEqual(breakingLines, ['Service removed: Payments', 'Method removed: Payments.CreatePayment']);
+});
+
+test('formatReport renders service-added as a SAFE line and passes the gate', () => {
+  const oldIr = makeIr({ services: [] });
+  const newIr = makeIr({ services: [service('Search', [])] });
+  const report = diffPackages(oldIr, newIr);
+  assert.equal(report.verdict, 'SAFE');
+  const text = formatReport(report);
+  assert.ok(text.includes('✓ Service added: Search'), text);
+  assert.ok(text.includes('Summary: 1 safe, 0 warnings, 0 breaking, 0 unknown'), text);
+  assert.ok(text.includes('Verdict: SAFE'), text);
+  assert.ok(text.includes('Compatibility: PASSED'), text);
+});
+
+test('formatReport renders service-removed as a breaking line and fails the gate', () => {
+  const oldIr = makeIr({ services: [service('Search', [])] });
+  const newIr = makeIr({ services: [] });
+  const report = diffPackages(oldIr, newIr);
+  assert.equal(report.verdict, 'BREAKING');
+  const text = formatReport(report);
+  assert.ok(text.includes('❌ Breaking: Service removed: Search'), text);
+  assert.ok(text.includes('Summary: 0 safe, 0 warnings, 1 breaking, 0 unknown'), text);
+  assert.ok(text.includes('Verdict: BREAKING'), text);
+  assert.ok(text.includes('Compatibility: FAILED'), text);
 });
 
 // ---------------------------------------------------------------------------

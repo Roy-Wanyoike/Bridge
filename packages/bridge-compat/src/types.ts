@@ -24,10 +24,11 @@ export type Classification = 'SAFE' | 'WARNING' | 'BREAKING' | 'UNKNOWN';
 export interface Change {
   /**
    * Dotted location of the change, e.g. `Payment.currency` (struct field),
-   * `Payments.CreatePayment` (method), `Payments.CreatePayment.input`
-   * (method signature half), `PaymentStatus.REFUNDED` (enum variant),
-   * `PaymentCaptured.amount` (event field), `imports.legacy.v1` (import),
-   * or the old package name for a package rename.
+   * `Payments` (service), `Payments.CreatePayment` (method),
+   * `Payments.CreatePayment.input` (method signature half),
+   * `PaymentStatus.REFUNDED` (enum variant), `PaymentCaptured.amount`
+   * (event field), `imports.legacy.v1` (import), or the old package name
+   * for a package rename.
    */
   path: string;
   /** Machine-readable kind of the change. */
@@ -45,8 +46,8 @@ export interface Change {
 /**
  * Machine-readable kinds of changes the engine detects. Kinds are grouped
  * by where they occur: fields (structs and, nested, events), enum variants,
- * union variants, aliases, whole types, service methods, events, and the
- * package envelope (name and imports).
+ * union variants, aliases, whole types, whole services, service methods,
+ * events, and the package envelope (name and imports).
  */
 export type ChangeKind =
   | 'field-added'
@@ -69,6 +70,8 @@ export type ChangeKind =
   | 'type-added'
   | 'type-removed'
   | 'type-kind-changed'
+  | 'service-added'
+  | 'service-removed'
   | 'method-added'
   | 'method-removed'
   | 'method-signature-changed'

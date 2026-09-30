@@ -488,12 +488,15 @@ function actionFor(change: Change): string {
       return 'Aliases are transparent to consumers — restore the old target or introduce a new alias name.';
     case 'alias-added':
     case 'type-added':
+    case 'service-added':
     case 'method-added':
     case 'event-added':
       return 'No action required — additive change.';
     case 'alias-removed':
     case 'type-removed':
       return 'Keep the type as a deprecated alias during the migration window; the listed consumers still reference it.';
+    case 'service-removed':
+      return 'Keep the service (or a delegating replacement) for one release cycle before removing it.';
     case 'type-kind-changed':
       return 'Changing a type kind breaks every reference — publish a new package version instead.';
     case 'method-removed':

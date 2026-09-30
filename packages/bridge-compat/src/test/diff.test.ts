@@ -595,10 +595,75 @@ test('method-removed is BREAKING', () => {
   assert.equal(c.path, 'Payments.CreatePayment');
 });
 
-test('removed service surfaces as method-removed per method', () => {
+test('removed service surfaces as service-removed plus per-method entries', () => {
   const report = diffPackages(makeIr(), makeIr({ services: [] }));
-  assert.deepEqual(report.changes.map((c) => [c.kind, c.path]), [['method-removed', 'Payments.CreatePayment']]);
+  assert.deepEqual(report.changes.map((c) => [c.kind, c.path]), [
+    ['service-removed', 'Payments'],
+    ['method-removed', 'Payments.CreatePayment'],
+  ]);
   assert.equal(report.verdict, 'BREAKING');
+});
+
+test('service-added: empty service is SAFE with exactly one entry', () => {
+  const oldIr = makeIr();
+  const newIr = makeIr({ services: [...oldIr.services, service('Search', [])] });
+  const report = diffPackages(oldIr, newIr);
+  assert.deepEqual(report.changes.map((c) => [c.kind, c.path]), [['service-added', 'Search']]);
+  const c = report.changes[0] as Change;
+  assert.equal(c.classification, 'SAFE');
+  assert.equal(c.message, 'Service added: Search');
+  assert.equal(report.verdict, 'SAFE');
+});
+
+test('service-removed: empty service is BREAKING with exactly one entry', () => {
+  const base = makeIr();
+  const oldIr = makeIr({ services: [...base.services, service('Search', [])] });
+  const report = diffPackages(oldIr, base);
+  assert.deepEqual(report.changes.map((c) => [c.kind, c.path]), [['service-removed', 'Search']]);
+  const c = report.changes[0] as Change;
+  assert.equal(c.classification, 'BREAKING');
+  assert.equal(c.message, 'Service removed: Search');
+  assert.equal(report.verdict, 'BREAKING');
+});
+
+test('removed non-empty service emits envelope plus per-method entries without duplicate paths', () => {
+  const oldIr = makeIr({
+    services: [
+      service('Payments', [
+        method('CreatePayment', named('CreatePaymentRequest'), named('Payment')),
+        method('Refund', named('RefundRequest'), named('Receipt')),
+      ]),
+    ],
+  });
+  const report = diffPackages(oldIr, makeIr({ services: [] }));
+  const paths = report.changes.map((c) => c.path);
+  assert.equal(new Set(paths).size, paths.length, `duplicate paths: ${JSON.stringify(paths)}`);
+  assert.deepEqual(report.changes.map((c) => [c.kind, c.path]), [
+    ['service-removed', 'Payments'],
+    ['method-removed', 'Payments.CreatePayment'],
+    ['method-removed', 'Payments.Refund'],
+  ]);
+  assert.equal(report.verdict, 'BREAKING');
+});
+
+test('added non-empty service emits envelope plus per-method entries without duplicate paths', () => {
+  const newIr = makeIr({
+    services: [
+      service('Payments', [
+        method('CreatePayment', named('CreatePaymentRequest'), named('Payment')),
+        method('Refund', named('RefundRequest'), named('Receipt')),
+      ]),
+    ],
+  });
+  const report = diffPackages(makeIr({ services: [] }), newIr);
+  const paths = report.changes.map((c) => c.path);
+  assert.equal(new Set(paths).size, paths.length, `duplicate paths: ${JSON.stringify(paths)}`);
+  assert.deepEqual(report.changes.map((c) => [c.kind, c.path]), [
+    ['service-added', 'Payments'],
+    ['method-added', 'Payments.CreatePayment'],
+    ['method-added', 'Payments.Refund'],
+  ]);
+  assert.equal(report.verdict, 'SAFE');
 });
 
 test('method-signature-changed input is BREAKING', () => {
