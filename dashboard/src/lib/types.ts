@@ -222,6 +222,13 @@ export interface AuditFilters {
   actor?: string;
   contract?: string;
   org?: string;
+  /**
+   * Entry cap for this query (issue #122). The live service clamps it into
+   * `[0, 10000]` and applies its own default (100) when absent; entries come
+   * back newest → oldest, so the cap trims the oldest tail. The demo client
+   * mirrors both behaviors.
+   */
+  limit?: number;
 }
 
 export interface OrgInfo {
@@ -265,7 +272,14 @@ export interface RegistryClient {
     from: string,
     to: string,
   ): Promise<DiffReport | null>;
-  getGraph(org?: string): Promise<GraphData>;
+  /**
+   * Dependency graph over every published contract (optionally scoped to one
+   * org). `knownContracts` lets a caller that already holds the contract list
+   * (the graph page renders its census from it) skip a second full registry
+   * walk; when omitted the client fetches the list itself. Provided lists are
+   * org-filtered here, so a full-registry list may be passed for any scope.
+   */
+  getGraph(org?: string, knownContracts?: ContractSummary[]): Promise<GraphData>;
   listAudit(filters?: AuditFilters): Promise<AuditEntry[]>;
   getOverview(): Promise<OverviewData>;
 }

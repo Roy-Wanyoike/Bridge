@@ -12,6 +12,7 @@ import {
   Waypoints,
 } from 'lucide-react';
 import type { OrgInfo } from '@/lib/types';
+import { contractsHref, parseScopeOptionValue, scopeOptionValue } from '@/lib/hrefs';
 import { cn } from '@/lib/utils';
 
 const NAV = [
@@ -79,7 +80,10 @@ function ScopeSwitcher({ orgs }: { orgs: OrgInfo[] }) {
   const project = searchParams.get('project') ?? '';
   const onContracts = pathname === '/contracts' || pathname.startsWith('/contracts/');
   const scopedOrg = onContracts && org ? org : '';
-  const value = scopedOrg && project ? `${scopedOrg}/${project}` : scopedOrg || 'all';
+  // Option values carry ENCODED segments (scopeOptionValue) so the later
+  // split in parseScopeOptionValue is unambiguous — a raw `${org}/${project}`
+  // value breaks when a name itself contains a slash (issue #122).
+  const value = scopedOrg ? scopeOptionValue(scopedOrg, project || undefined) : 'all';
 
   return (
     <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -88,23 +92,19 @@ function ScopeSwitcher({ orgs }: { orgs: OrgInfo[] }) {
       <select
         value={value}
         onChange={(e) => {
-          const v = e.target.value;
-          if (v === 'all') router.push('/contracts');
-          else {
-            const [nextOrg, nextProject] = v.split('/');
-            router.push(
-              `/contracts?org=${encodeURIComponent(nextOrg)}&project=${encodeURIComponent(nextProject)}`,
-            );
-          }
+          const parsed = parseScopeOptionValue(e.target.value);
+          router.push(parsed ? contractsHref(parsed.org, parsed.project) : contractsHref());
         }}
         className="h-8 appearance-none rounded-md border border-input bg-card px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <option value="all">All orgs</option>
-        {scopedOrg && !project && <option value={scopedOrg}>{scopedOrg} / all projects</option>}
+        {scopedOrg && !project && (
+          <option value={scopeOptionValue(scopedOrg)}>{scopedOrg} / all projects</option>
+        )}
         {orgs.map((o) => (
           <optgroup key={o.org} label={o.org}>
             {o.projects.map((p) => (
-              <option key={p} value={`${o.org}/${p}`}>
+              <option key={p} value={scopeOptionValue(o.org, p)}>
                 {o.org} / {p}
               </option>
             ))}

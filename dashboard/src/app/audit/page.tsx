@@ -16,7 +16,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/format';
-import { getRegistryClient } from '@/lib/registry-client';
+import { contractHref } from '@/lib/hrefs';
+import { AUDIT_FETCH_LIMIT, getRegistryClient } from '@/lib/registry-client';
 import { cn } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
@@ -48,21 +49,23 @@ export default async function AuditPage({ searchParams }: { searchParams: SP }) 
   const contract = sp.contract ?? '';
 
   const client = getRegistryClient();
-  // The action/actor filters are applied server-side (the audit API supports
-  // them); the actor dropdown needs the unfiltered actor set, so both fetches
-  // run in parallel. The contract filter stays client-side because the view
-  // matches substrings, which the API does not.
-  const [allEntries, filteredEntries] = await Promise.all([
-    client.listAudit(),
-    client.listAudit({
-      action: action || undefined,
-      actor: actor || undefined,
-    }),
-  ]);
+  // ONE bounded fetch serves the whole view. The action/actor filters are
+  // exact-match, so applying them client-side over the fetched rows is
+  // semantically identical to the API's server-side filtering — and the
+  // actor dropdown derives from the very same rows, so the old pattern of
+  // pulling the (implicit-default-capped) log twice per request is gone.
+  // The contract filter stays client-side because the view matches
+  // substrings, which the API does not. The fetch is capped at
+  // AUDIT_FETCH_LIMIT (newest-first per the service contract) so a long
+  // trail can never bloat the request or the render.
+  const allEntries = await client.listAudit({ limit: AUDIT_FETCH_LIMIT });
   const actors = [...new Set(allEntries.map((e) => e.actor))].sort();
-  const entries = contract
-    ? filteredEntries.filter((e) => e.contract.toLowerCase().includes(contract.toLowerCase()))
-    : filteredEntries;
+  const entries = allEntries.filter((e) => {
+    if (action && e.action !== action) return false;
+    if (actor && e.actor !== actor) return false;
+    if (contract && !e.contract.toLowerCase().includes(contract.toLowerCase())) return false;
+    return true;
+  });
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -152,7 +155,7 @@ export default async function AuditPage({ searchParams }: { searchParams: SP }) 
                   <TableCell className="whitespace-nowrap text-muted-foreground">{e.actor}</TableCell>
                   <TableCell>
                     <Link
-                      href={`/contracts/${encodeURIComponent(e.org)}/${encodeURIComponent(e.project)}/${encodeURIComponent(e.contract)}`}
+                      href={contractHref(e.org, e.project, e.contract)}
                       className="font-mono text-[13px] hover:text-primary"
                     >
                       {e.contract}

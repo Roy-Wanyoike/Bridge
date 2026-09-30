@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/empty-state';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { formatDateTime, kindLabel, suggestedAction } from '@/lib/format';
+import { contractHref } from '@/lib/hrefs';
 import { getRegistryClient } from '@/lib/registry-client';
 import type { Change, Classification } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -96,7 +97,7 @@ export default async function DiffPage({
           </Link>
           <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
           <Link
-            href={`/contracts/${encodeURIComponent(org)}/${encodeURIComponent(project)}/${encodeURIComponent(contract)}`}
+            href={contractHref(org, project, contract)}
             className="font-mono hover:text-foreground"
           >
             {contract}
@@ -130,7 +131,7 @@ export default async function DiffPage({
           Contracts
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-        <Link href={`/contracts/${encodeURIComponent(org)}/${encodeURIComponent(project)}/${encodeURIComponent(contract)}`} className="font-mono hover:text-foreground">
+        <Link href={contractHref(org, project, contract)} className="font-mono hover:text-foreground">
           {contract}
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
@@ -153,7 +154,7 @@ export default async function DiffPage({
             )}
           </p>
         </div>
-        <DiffVersionPicker basePath={`/contracts/${org}/${project}/${contract}`} versions={versions} from={from} to={to} />
+        <DiffVersionPicker basePath={contractHref(org, project, contract)} versions={versions} from={from} to={to} />
       </header>
 
       {/* Verdict banner */}
@@ -279,7 +280,11 @@ export default async function DiffPage({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <Link
-                        href={`/contracts/${encodeURIComponent(c.org ?? org)}/${encodeURIComponent(c.project ?? project)}/${encodeURIComponent(c.packageName.replace(/\.v\d+$/, ''))}`}
+                        href={contractHref(
+                          c.org ?? org,
+                          c.project ?? project,
+                          c.packageName.replace(/\.v\d+$/, ''),
+                        )}
                         className="font-mono text-[13px] hover:text-primary"
                       >
                         {c.packageName}

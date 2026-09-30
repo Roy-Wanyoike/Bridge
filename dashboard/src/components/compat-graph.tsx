@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
+import { contractHref } from '@/lib/hrefs';
 import type { Classification, GraphData } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -172,9 +173,9 @@ export function CompatGraph({ data }: { data: GraphData }) {
             onMouseLeave={() => setHovered(null)}
             onFocus={() => setHovered(n.id)}
             onBlur={() => setHovered(null)}
-            onClick={() => router.push(`/contracts/${n.org}/${n.project}/${n.base}`)}
+            onClick={() => router.push(contractHref(n.org, n.project, n.base))}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') router.push(`/contracts/${n.org}/${n.project}/${n.base}`);
+              if (e.key === 'Enter') router.push(contractHref(n.org, n.project, n.base));
             }}
             opacity={dim ? 0.25 : 1}
           >

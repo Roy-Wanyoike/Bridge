@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatDateTime, LANGUAGE_LABELS } from '@/lib/format';
+import { contractDiffHref, contractHref, contractsHref } from '@/lib/hrefs';
 import { getRegistryClient, mapBounded } from '@/lib/registry-client';
 import type { Classification, VersionDetail, VersionRef } from '@/lib/types';
 
@@ -106,14 +107,11 @@ export default async function ContractDetailPage({ params }: { params: Params })
           Contracts
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-        <Link href={`/contracts?org=${encodeURIComponent(org)}`} className="hover:text-foreground">
+        <Link href={contractsHref(org)} className="hover:text-foreground">
           {org}
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-        <Link
-          href={`/contracts?org=${encodeURIComponent(org)}&project=${encodeURIComponent(project)}`}
-          className="hover:text-foreground"
-        >
+        <Link href={contractsHref(org, project)} className="hover:text-foreground">
           {project}
         </Link>
         <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
@@ -216,7 +214,7 @@ export default async function ContractDetailPage({ params }: { params: Params })
                     )}
                     {vd && (
                       <Link
-                        href={`/contracts/${encodeURIComponent(org)}/${encodeURIComponent(project)}/${encodeURIComponent(contract)}/diff?from=${encodeURIComponent(vd.from)}&to=${encodeURIComponent(entry.ref.version)}`}
+                        href={contractDiffHref(org, project, contract, vd.from, entry.ref.version)}
                         className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
                       >
                         diff {vd.from} → {entry.ref.version}
@@ -300,7 +298,7 @@ export default async function ContractDetailPage({ params }: { params: Params })
                       <TableRow key={c.packageName}>
                         <TableCell>
                           <Link
-                            href={`/contracts/${encodeURIComponent(c.org)}/${encodeURIComponent(c.project)}/${encodeURIComponent(c.base)}`}
+                            href={contractHref(c.org, c.project, c.base)}
                             className="font-mono text-[13px] hover:text-primary"
                           >
                             {c.packageName}
