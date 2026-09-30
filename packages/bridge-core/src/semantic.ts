@@ -13,7 +13,8 @@
  *
  * Diagnostic codes (stable — registry and CLI surface them):
  * - BR2001 unknown type reference (errors, with did-you-mean hint when close)
- * - BR2002 duplicate top-level declaration name (type/event/service)
+ * - BR2002 duplicate top-level declaration name — within a kind, or across
+ *   kinds (type/event/service share one namespace)
  * - BR2003 duplicate field / union-member name
  * - BR2004 duplicate enum variant name
  * - BR2005 duplicate method name
@@ -260,6 +261,23 @@ const SCREAMING_CASE_RE = /^[A-Z][A-Z0-9_]*$/;
 /** snake_case for fields: `customer_id`, `amount2`, `id`. */
 const SNAKE_CASE_RE = /^[a-z][a-z0-9_]*$/;
 
+/**
+ * The three top-level declaration kinds, in the fixed order used to build
+ * deterministic cross-kind collision messages (BR2002). Types, events and
+ * services share one namespace: generators emit every declaration into the
+ * same file/scope, so a name used by one kind may not be reused by another.
+ */
+const DECL_KINDS = ['type', 'event', 'service'] as const;
+type DeclKind = (typeof DECL_KINDS)[number];
+
+/** Render colliding kinds for a BR2002 message: `['type', 'event']` → `a type and an event`. */
+function describeDeclKinds(kinds: readonly DeclKind[]): string {
+  const phrases = kinds.map((k) => (k === 'event' ? 'an event' : `a ${k}`));
+  if (phrases.length <= 1) return phrases[0] ?? '';
+  const head = phrases.slice(0, -1).join(', ');
+  return `${head} and ${phrases[phrases.length - 1]}`;
+}
+
 /** Options for {@link analyzeFile}. */
 export interface AnalyzeOptions {
   /**
@@ -454,10 +472,12 @@ class Analyzer {
     const seenTypes = new Set<string>();
     const seenEvents = new Set<string>();
     const seenServices = new Set<string>();
+    /** Every top-level name → the kinds already using it (cross-kind BR2002). */
+    const usedByKind = new Map<string, DeclKind[]>();
 
     for (const decl of this.file.decls) {
       if (isTypeDecl(decl)) {
-        this.checkDuplicateName(seenTypes, decl.name, 'type', decl.line, decl.column);
+        this.checkDuplicateName(seenTypes, decl.name, 'type', decl.line, decl.column, usedByKind);
         if (!PASCAL_CASE_RE.test(decl.name)) {
           this.warning(
             SEMANTIC_CODES.typeNameStyle,
@@ -484,21 +504,31 @@ class Analyzer {
             break;
         }
       } else if (decl.decl === 'event') {
-        this.checkDuplicateName(seenEvents, decl.name, 'event', decl.line, decl.column);
+        this.checkDuplicateName(seenEvents, decl.name, 'event', decl.line, decl.column, usedByKind);
         this.checkFieldBody(decl.fields, `event \`${decl.name}\``);
       } else {
-        this.checkDuplicateName(seenServices, decl.name, 'service', decl.line, decl.column);
+        this.checkDuplicateName(seenServices, decl.name, 'service', decl.line, decl.column, usedByKind);
         this.checkService(decl);
       }
     }
   }
 
+  /**
+   * Duplicate-name check for one top-level declaration, covering both
+   * within-kind duplicates (`type Money` twice — the original BR2002) and
+   * cross-kind collisions (`type Money` + `event Money`, which generators
+   * emit into the same scope — also BR2002). Each offending declaration
+   * produces exactly one diagnostic; the colliding kinds are listed in the
+   * fixed DECL_KINDS order so messages are deterministic regardless of the
+   * order the declarations appear in.
+   */
   private checkDuplicateName(
     seen: Set<string>,
     name: string,
-    what: string,
+    what: DeclKind,
     line: number,
     column: number,
+    usedByKind: Map<string, DeclKind[]>,
   ): void {
     if (name === '') return; // parse error already reported
     if (seen.has(name)) {
@@ -509,9 +539,25 @@ class Analyzer {
         column,
         `Rename one of the declarations — ${what} names must be unique within a package.`,
       );
-    } else {
-      seen.add(name);
+      return;
     }
+    seen.add(name);
+
+    // Cross-kind namespace check. `seen` and `usedByKind` are updated in
+    // lockstep (both on first sight of a name per kind), so `kinds` never
+    // contains `what` here and within-kind duplicates never re-report.
+    const kinds = usedByKind.get(name) ?? [];
+    if (!kinds.includes(what)) kinds.push(what);
+    usedByKind.set(name, kinds);
+    const others = DECL_KINDS.filter((k) => k !== what && kinds.includes(k));
+    if (others.length === 0) return;
+    this.error(
+      SEMANTIC_CODES.duplicateDeclaration,
+      `Duplicate ${what} name \`${name}\` — ${describeDeclKinds(others)} with this name already ${others.length === 1 ? 'exists' : 'exist'}.`,
+      line,
+      column,
+      'Rename one of the declarations — type, event and service names share one namespace within a package.',
+    );
   }
 
   // --------------------------------------------------------------- fields
