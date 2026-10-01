@@ -1,8 +1,13 @@
 # Bridge
 
 [![CI](https://github.com/Roy-Wanyoike/bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Roy-Wanyoike/bridge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](package.json)
+[![Tests](https://img.shields.io/badge/tests-831%20%2B%2094-success)](#status)
 
 > **One contract. Every language. Zero interoperability drift.**
+>
+> Bridge is a polyglot contract compiler and compatibility platform: define a data or service contract once, and the compiler generates idiomatic, validated code for six languages, classifies every change SAFE / WARNING / BREAKING / UNKNOWN before it merges, and tracks who consumes what in a content-addressed registry.
 
 ## The problem
 
@@ -53,6 +58,18 @@ That last one is the point: the rename a code reviewer would wave through fails 
 - **Breaking changes are caught at merge time, with honest classification.** Checks are built into the compiler (not bolted onto a spec parser), deterministic, and conservative — an undecidable change is reported as UNKNOWN and fails the default gate.
 - **The registry answers the question no other tool can:** "who consumes this contract, and what does this change do to them?" Content-addressed, immutable, with a real dependency graph — one registry for your services, events, and APIs, not one per wire format.
 - **Built for the AI-agent era.** Agents calling typed tools are just more consumers of contracts. Bridge's constraint parity, deterministic hashing, and compatibility gates apply to machine-to-machine and model-to-tool surfaces the same way they apply to your Go and Python services.
+
+## Why this wins
+
+The category doesn't exist yet, and the pieces that pretend to are format-bound. Buf lints protos. Confluent's registry checks Avro subjects. OpenAPI differs check specs. Each one guards a single format, and none can answer the question every polyglot org asks weekly: who consumes this contract, and what does this change do to them?
+
+Bridge's defense compounds from three places:
+
+1. **The compiler is the moat.** Compatibility is computed in the compiler against a canonical, hashable IR, not bolted onto a spec parser. That's years of compiler work a spec-linter can't retrofit.
+2. **The registry is the lock-in.** Content-addressed, immutable, with a real dependency graph. Every published contract makes `bridge impact` more valuable and switching costlier.
+3. **The AI-agent era multiplies demand.** Tool-calling surfaces, MCP servers, and multi-agent systems generate machine-to-machine contracts faster than hand-maintained bindings can track, and they need exactly what Bridge enforces: one source of truth, validators in every runtime, a gate that stops breaking changes before they ship.
+
+Full analysis in [docs/strategy/MARKET_ANALYSIS.md](docs/strategy/MARKET_ANALYSIS.md) and [docs/strategy/POSITIONING.md](docs/strategy/POSITIONING.md).
 
 ## Architecture
 
@@ -232,6 +249,8 @@ Requires Node.js >= 22. The test suite covers all nine packages (831 tests: comp
 ## Contributing
 
 Bridge is an open-source project and contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). Good first issues are labeled [`good first issue`](https://github.com/Roy-Wanyoike/bridge/labels/good%20first%20issue), and the [roadmap issues](https://github.com/Roy-Wanyoike/bridge/issues) are the fastest way to see where help is needed.
+
+If you're scoping the codebase: the compiler core (`packages/bridge-core`: lexer, parser, semantic analysis, canonical IR) is the heart of the project; `packages/bridge-generators` carries six language backends with byte-level snapshot tests; `packages/bridge-registry-service` is a hardened multi-tenant HTTP service (auth, rate limiting, signing, audit); and `dashboard/` is a Next.js console with its own 94-test suite. Whatever you pick up, the rule in CONTRIBUTING holds: a feature is done when it's implemented, tested, documented, and verified, never before.
 
 ## License
 
