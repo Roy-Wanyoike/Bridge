@@ -24,7 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { formatDateTime } from '@/lib/format';
+import { formatDate, formatDateTime } from '@/lib/format';
 import { auditHref, contractDiffHref, contractHref } from '@/lib/hrefs';
 import { getRegistryClient } from '@/lib/registry-client';
 import type { Classification } from '@/lib/types';
@@ -154,7 +154,12 @@ export default async function OverviewPage() {
                 <TableRow>
                   <TableHead>Contract</TableHead>
                   <TableHead>Version</TableHead>
-                  <TableHead>Publisher</TableHead>
+                  {/* Responsive column priority (issue #153): the card gets
+                      ~3/5 of the content column at xl, and Contract + Version
+                      + Languages + Published already need that width. The
+                      publisher rides along only from 2xl up — the audit log
+                      remains the precision record for who published what. */}
+                  <TableHead className="hidden 2xl:table-cell">Publisher</TableHead>
                   <TableHead>Languages</TableHead>
                   <TableHead className="text-right">Published</TableHead>
                 </TableRow>
@@ -182,12 +187,18 @@ export default async function OverviewPage() {
                         <span className="text-xs text-muted-foreground">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{p.publisher}</TableCell>
+                    <TableCell className="hidden text-muted-foreground 2xl:table-cell">{p.publisher}</TableCell>
                     <TableCell>
                       <LanguageBadges languages={p.languages} />
                     </TableCell>
-                    <TableCell className="text-right text-xs text-muted-foreground">
-                      {formatDateTime(p.publishedAt)}
+                    <TableCell
+                      className="whitespace-nowrap text-right text-xs text-muted-foreground"
+                      title={p.publishedAt ? formatDateTime(p.publishedAt) : undefined}
+                    >
+                      {/* Compact date: this table ranks recency; the full
+                          timestamp stays in the tooltip and the audit log
+                          (issue #153). */}
+                      {formatDate(p.publishedAt)}
                     </TableCell>
                   </TableRow>
                 ))}
