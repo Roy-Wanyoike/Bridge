@@ -148,7 +148,10 @@ export default async function AuditPage({ searchParams }: { searchParams: SP }) 
                     {formatDateTime(e.at)}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={ACTION_VARIANT[e.action] ?? 'secondary'} className="font-mono">
+                    {/* whitespace-nowrap: a badge's content is a single
+                        token — without it `compat-check` wraps mid-word when
+                        the auto column width squeezes the badge (issue #154). */}
+                    <Badge variant={ACTION_VARIANT[e.action] ?? 'secondary'} className="whitespace-nowrap font-mono">
                       {e.action}
                     </Badge>
                   </TableCell>
