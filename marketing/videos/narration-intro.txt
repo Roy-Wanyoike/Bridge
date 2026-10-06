@@ -1,0 +1,5 @@
+Every polyglot team lives this. One data contract, hand copied into Go, TypeScript, Python, Java, C sharp, and Rust. Nothing keeps the copies honest.
+
+Bridge ends the drift. Define it once, and the compiler generates idiomatic code for six languages, with validators for every constraint. Rename a field, and bridge diff catches it. Bridge check blocks the merge.
+
+One contract. Every language. Zero interoperability drift.

@@ -1,5 +1,12 @@
 # Bridge
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="marketing/logo/bridge-lockup-dark.svg">
+    <img src="marketing/logo/bridge-lockup-light.svg" alt="bridge — one contract, every language" width="540">
+  </picture>
+</p>
+
 [![CI](https://github.com/Roy-Wanyoike/bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Roy-Wanyoike/bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](package.json)
