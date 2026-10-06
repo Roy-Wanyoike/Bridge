@@ -182,7 +182,7 @@ export default async function DiffPage({
       </section>
 
       {/* Summary + impact */}
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card className="p-5">
           <CardDescription>Verdict</CardDescription>
           <CardTitle className="mt-2 flex items-center gap-2">
@@ -219,7 +219,7 @@ export default async function DiffPage({
         </Card>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         {/* Change list */}
         <Card className="xl:col-span-2">
           <CardHeader>

@@ -90,8 +90,8 @@ export default async function ContractsPage({ searchParams }: { searchParams: Se
 
       {/* Filter bar */}
       <Card className="p-4">
-        <form method="GET" action="/contracts" className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <form method="GET" action="/contracts" className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <label className="relative block">
               <span className="sr-only">Search contracts</span>
               <Search
@@ -139,7 +139,10 @@ export default async function ContractsPage({ searchParams }: { searchParams: Se
               </Select>
             </label>
           </div>
-          <div className="flex items-center gap-2 md:justify-end">
+          {/* flex-wrap: below md the sort select (w-40) + Apply + Reset
+              exceed ultra-narrow rows; the pair wraps instead of pushing the
+              page wider (issue #152). */}
+          <div className="flex flex-wrap items-center gap-2 md:justify-end">
             <label className="flex items-center gap-2">
               <span className="sr-only">Sort</span>
               <ArrowDownWideNarrow className="h-4 w-4 text-muted-foreground" aria-hidden="true" />

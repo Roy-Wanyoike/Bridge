@@ -80,8 +80,8 @@ export default async function AuditPage({ searchParams }: { searchParams: SP }) 
       </header>
 
       <Card className="p-4">
-        <form method="GET" action="/audit" className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <div className="grid gap-3 sm:grid-cols-3">
+        <form method="GET" action="/audit" className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <label>
               <span className="sr-only">Action</span>
               <Select name="action" defaultValue={action} aria-label="Filter by action">

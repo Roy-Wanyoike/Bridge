@@ -76,7 +76,12 @@ function TabsList({ className, ...props }: TabsListProps) {
       role="tablist"
       onKeyDown={onKeyDown}
       className={cn(
-        'inline-flex h-9 items-center gap-1 rounded-lg border border-border bg-secondary/50 p-1',
+        // max-w-full + overflow-x-auto: on narrow viewports the min-content of
+        // the tab strip (4 triggers) exceeds the container — without a cap the
+        // strip pushes the PAGE wider (grid/flex items honor content minimum).
+        // The strip scrolls internally instead; the APG keyboard pattern is
+        // unaffected.
+        'inline-flex h-9 max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-border bg-secondary/50 p-1',
         className,
       )}
       {...props}

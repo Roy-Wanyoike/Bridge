@@ -227,7 +227,7 @@ export default async function ContractDetailPage({ params }: { params: Params })
                       Metadata for this version is unavailable from the registry.
                     </p>
                   ) : (
-                    <div className="mt-2 grid gap-x-8 gap-y-1 text-sm text-muted-foreground sm:grid-cols-2">
+                    <div className="mt-2 grid grid-cols-1 gap-x-8 gap-y-1 text-sm text-muted-foreground sm:grid-cols-2">
                       <span>
                         Published by <span className="text-foreground">{v.publisher}</span>
                       </span>
@@ -327,7 +327,7 @@ export default async function ContractDetailPage({ params }: { params: Params })
 
         {/* Producers */}
         <TabsContent value="producers">
-          <div className="grid gap-6 xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
