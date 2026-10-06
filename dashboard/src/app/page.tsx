@@ -75,7 +75,7 @@ export default async function OverviewPage() {
       </header>
 
       {/* Totals */}
-      <section aria-label="Registry totals" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-label="Registry totals" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard icon={Boxes} value={data.contracts} label="Contracts" href="/contracts" />
         <StatCard icon={Layers} value={data.versions} label="Versions" footnote="immutable, content-addressed" />
         <StatCard
@@ -94,7 +94,7 @@ export default async function OverviewPage() {
       </section>
 
       {/* Health-style status cards */}
-      <section aria-label="Compatibility health" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-label="Compatibility health" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {(['SAFE', 'WARNING', 'BREAKING', 'UNKNOWN'] as Classification[]).map((verdict) => (
           <Card key={verdict} className={cn('p-5', VERDICT_CARD[verdict])}>
             <div className="flex items-start justify-between gap-2">
@@ -118,7 +118,7 @@ export default async function OverviewPage() {
         ))}
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
         {/* Recent publishes */}
         <Card className="xl:col-span-3">
           <CardHeader className="flex-row items-center justify-between space-y-0">

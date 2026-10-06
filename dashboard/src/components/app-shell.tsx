@@ -86,16 +86,21 @@ function ScopeSwitcher({ orgs }: { orgs: OrgInfo[] }) {
   const value = scopedOrg ? scopeOptionValue(scopedOrg, project || undefined) : 'all';
 
   return (
-    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+    // min-w-0 on the label + a width cap on the select: the switcher lives in
+    // the sticky header row, and a native select sizes to its longest option
+    // ("acme / commerce / orders") — without a cap it pushes the header past
+    // ultra-narrow viewports (320px). Below sm the cap engages and the option
+    // text clips natively; from sm up the switcher keeps its natural width.
+    <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
       <span className="sr-only">Scope: org and project</span>
-      <GitBranch className="h-3.5 w-3.5" aria-hidden="true" />
+      <GitBranch className="hidden h-3.5 w-3.5 shrink-0 sm:block" aria-hidden="true" />
       <select
         value={value}
         onChange={(e) => {
           const parsed = parseScopeOptionValue(e.target.value);
           router.push(parsed ? contractsHref(parsed.org, parsed.project) : contractsHref());
         }}
-        className="h-8 appearance-none rounded-md border border-input bg-card px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="h-8 max-w-[7.5rem] appearance-none rounded-md border border-input bg-card px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:max-w-none"
       >
         <option value="all">All orgs</option>
         {scopedOrg && !project && (
