@@ -47,6 +47,13 @@ export function lineTextAt(text: string, line: number): string | undefined {
   return text.split('\n')[line];
 }
 
+/** The document text covered by a single-line `range` (e.g. an identifier). */
+export function textAtRange(text: string, range: Range): string {
+  const line = lineTextAt(text, range.start.line);
+  if (line === undefined || range.start.line !== range.end.line) return '';
+  return line.slice(range.start.character, range.end.character);
+}
+
 function isIdentChar(ch: string | undefined): boolean {
   return ch !== undefined && /[A-Za-z0-9_]/.test(ch);
 }

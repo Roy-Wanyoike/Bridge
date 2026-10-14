@@ -10,9 +10,12 @@
  * - `BridgeLspServer` — transport-agnostic message handling + document store
  * - `MessageReader` / `writeMessage` — LSP framing primitives
  * - `toLspDiagnostic`, `toLspPosition` / `toBridgePosition`, `identifierAt`,
- *   `fullDocumentRange`, `wordPrefixAt`, `diagnosticRangeAt` — position
- *   mapping and text utilities (UTF-16 code unit semantics, see positions.ts)
- * - protocol types + `Methods`, `ErrorCodes` constants
+ *   `textAtRange`, `fullDocumentRange`, `wordPrefixAt`, `diagnosticRangeAt` —
+ *   position mapping and text utilities (UTF-16 code unit semantics, see
+ *   positions.ts)
+ * - `buildSymbolIndex` + lookup helpers — the AST symbol index behind
+ *   definition/references/documentSymbol/rename (see symbols.ts)
+ * - protocol types + `Methods`, `ErrorCodes`, `SymbolKind` constants
  */
 
 export { createConnection, type ConnectionOptions, type LspConnection } from './connection';
@@ -31,8 +34,25 @@ export {
   fullDocumentRange,
   identifierAt,
   lineTextAt,
+  textAtRange,
   toBridgePosition,
   toLspPosition,
   wordPrefixAt,
 } from './positions';
+export {
+  buildSymbolIndex,
+  declAtPosition,
+  declSymbolKind,
+  documentSymbols,
+  findDeclByName,
+  isTypeDeclSymbol,
+  memberAtPosition,
+  typeRefAtPosition,
+  localRefsTo,
+  type DeclSymbol,
+  type MemberSymbol,
+  type SymbolIndex,
+  type TopDeclKind,
+  type TypeRefSymbol,
+} from './symbols';
 export * from './protocol';
