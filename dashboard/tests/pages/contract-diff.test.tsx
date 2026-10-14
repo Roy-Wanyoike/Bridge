@@ -1,7 +1,7 @@
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import DiffPage from '@/app/contracts/[org]/[project]/[contract]/diff/page';
+import DiffPage from '@/app/(console)/contracts/[org]/[project]/[contract]/diff/page';
 import { holder } from '../helpers/client-holder';
 
 vi.mock('@/lib/registry-client', async (importOriginal) => {

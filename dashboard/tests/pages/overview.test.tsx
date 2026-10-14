@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import OverviewPage from '@/app/page';
+import OverviewPage from '@/app/(console)/page';
 import { holder } from '../helpers/client-holder';
 import { staticRegistryClient } from '../helpers/static-registry';
 

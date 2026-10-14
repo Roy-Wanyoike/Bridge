@@ -1,7 +1,7 @@
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import GraphPage from '@/app/graph/page';
+import GraphPage from '@/app/(console)/graph/page';
 import { holder } from '../helpers/client-holder';
 import { staticRegistryClient } from '../helpers/static-registry';
 

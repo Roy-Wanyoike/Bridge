@@ -2,5 +2,5 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "installCommand": "npm ci --no-audit --no-fund",
-  "buildCommand": "NEXT_PUBLIC_DEMO_MODE=true npm run build"
+  "buildCommand": "NEXT_PUBLIC_DEMO_MODE=true AUTH_DISABLED=true npm run build"
 }

@@ -12,8 +12,15 @@ import {
   Waypoints,
 } from 'lucide-react';
 import type { OrgInfo } from '@/lib/types';
+import { BrandMark } from '@/components/brand-mark';
 import { contractsHref, parseScopeOptionValue, scopeOptionValue } from '@/lib/hrefs';
 import { cn } from '@/lib/utils';
+
+interface SessionInfo {
+  sub: string;
+  name?: string;
+  email?: string;
+}
 
 const NAV = [
   { href: '/', label: 'Overview', icon: LayoutDashboard },
@@ -21,33 +28,6 @@ const NAV = [
   { href: '/graph', label: 'Dependency graph', icon: Waypoints },
   { href: '/audit', label: 'Audit log', icon: ScrollText },
 ] as const;
-
-function BrandMark({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-      className={cn('h-7 w-7', className)}
-    >
-      <path
-        d="M3 17 12 4l9 13"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M3 17h18"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        opacity="0.55"
-      />
-      <circle cx="12" cy="13" r="2.2" fill="currentColor" />
-    </svg>
-  );
-}
 
 function NavLink({ href, label, icon: Icon, active }: { href: string; label: string; icon: typeof Boxes; active: boolean }) {
   return (
@@ -124,10 +104,16 @@ export function AppShell({
   orgs,
   demoMode,
   children,
+  authEnabled = false,
+  session = null,
 }: {
   orgs: OrgInfo[];
   demoMode: boolean;
   children: React.ReactNode;
+  /** True when the OIDC gate is enforced (issue #163). */
+  authEnabled?: boolean;
+  /** Verified session claims for the signed-in user, null when gate is off. */
+  session?: SessionInfo | null;
 }) {
   const pathname = usePathname();
 
@@ -204,11 +190,31 @@ export function AppShell({
               </span>
               <span>registry state: content-addressed, immutable versions</span>
             </div>
-            {onContracts && (
-              <React.Suspense fallback={null}>
-                <ScopeSwitcher orgs={orgs} />
-              </React.Suspense>
-            )}
+            <div className="flex min-w-0 items-center gap-2">
+              {onContracts && (
+                <React.Suspense fallback={null}>
+                  <ScopeSwitcher orgs={orgs} />
+                </React.Suspense>
+              )}
+              {authEnabled && session && (
+                <div className="flex shrink-0 items-center gap-2">
+                  <span
+                    className="hidden max-w-[10rem] truncate text-xs text-muted-foreground sm:inline"
+                    title={session.email ?? session.name ?? session.sub}
+                  >
+                    {session.name ?? session.email ?? 'Signed in'}
+                  </span>
+                  {/* Full navigation on purpose: /logout is a route handler
+                      that clears the session cookie, then lands on /login. */}
+                  <a
+                    href="/logout"
+                    className="shrink-0 rounded-md border border-border bg-secondary/60 px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Sign out
+                  </a>
+                </div>
+              )}
+            </div>
           </div>
           {/* compact nav for narrow viewports */}
           <nav aria-label="Primary" className="flex gap-1 overflow-x-auto px-4 pb-2 lg:hidden">

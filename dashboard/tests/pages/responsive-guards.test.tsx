@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
-import OverviewPage from '@/app/page';
-import ContractsPage from '@/app/contracts/page';
-import AuditPage from '@/app/audit/page';
-import GraphPage from '@/app/graph/page';
+import OverviewPage from '@/app/(console)/page';
+import ContractsPage from '@/app/(console)/contracts/page';
+import AuditPage from '@/app/(console)/audit/page';
+import GraphPage from '@/app/(console)/graph/page';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 // The scope-switcher guard renders AppShell, whose ScopeSwitcher mounts only
