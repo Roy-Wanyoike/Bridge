@@ -84,6 +84,41 @@ referrer, no powerful browser features, no `X-Powered-By`) harden the browser
 surface; they do not authenticate viewers. Demo mode carries no registry
 credential and no real data, so the boundary applies to live deployments only.
 
+## Deploying to Vercel
+
+The dashboard deploys to Vercel as a standalone project. Because the app lives
+in `dashboard/` (with its own lockfile) rather than the monorepo root — the
+root builds the compiler packages, not a web app — the Vercel project must be
+configured once:
+
+1. Import the repo, then set **Root Directory = `dashboard`** (Project →
+   Settings → General). Framework auto-detects as Next.js.
+2. No environment variables are required: `dashboard/vercel.json` pins
+   `NEXT_PUBLIC_DEMO_MODE=true` for the deployment, so a fresh import renders
+   the zero-backend demo — the seeded dataset, no registry service, no
+   credential anywhere near a public URL.
+3. Optional: set `NEXT_PUBLIC_CONSOLE_URL` to the deployment's final origin
+   (e.g. `https://bridge-dashboard.vercel.app`) so canonical/OG metadata
+   points at the real URL instead of `http://localhost:3000`.
+
+Local check that mirrors the platform build exactly (no auth needed):
+`npx vercel@latest build` from `dashboard/`.
+
+Why demo mode is pinned in `vercel.json`: a production build defaults to live
+mode (fail-closed — see the environment table below), and live mode on a
+public URL requires an authenticating reverse proxy per the deployment
+boundary above. To go live on Vercel anyway, set
+`NEXT_PUBLIC_DEMO_MODE=false`, `NEXT_PUBLIC_REGISTRY_URL`, `REGISTRY_TOKEN`
+and `REGISTRY_ORGS` in Project Settings (overriding the pin), and put an
+identity-aware gateway in front of the deployment first.
+
+Known failure signatures, for diagnosis:
+
+| Signature | Meaning | Fix |
+|-----------|---------|-----|
+| `[STATIC_BUILD_NO_OUT_DIR] No Output Directory named "public"` | Project Root Directory is the repo root — the compiler's `tsc -b` ran, not Next.js | Set Root Directory = `dashboard` |
+| `RegistryMisconfigured: live mode is enabled but ...` | Production build defaulted to live mode with no registry configured | Root Directory = `dashboard` (so `vercel.json` applies) or set `NEXT_PUBLIC_DEMO_MODE=true` |
+
 ## Routes
 
 | Route | Shows |
