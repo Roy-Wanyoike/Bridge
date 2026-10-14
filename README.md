@@ -19,17 +19,21 @@
 ## The problem
 
 If your stack spans more than one language, you live this: the same data contract — `Payment`, `PaymentStatus`, the rule that currency is exactly 3 characters — is hand-implemented in Go, re-implemented in TypeScript, re-implemented again in Python. Nothing keeps those copies in sync. A "harmless" field rename ships, and three weeks later a consumer in another runtime discovers it in production. Breaking-change checks, where they exist at all, are per-tool and per-format: a linter for your proto files, a differ for your OpenAPI specs — and nothing that knows *who consumes what*.
+
 ## What problem does Bridge solve?
+
 Imagine a company where the payments team writes code in Go, the web team uses TypeScript, and the data team uses Python. All three teams need to agree on what a "Payment" looks like: it has an amount, a currency (exactly 3 letters), a status, and so on.
 
 The usual way this happens today: each team hand-writes their own copy of those rules in their own language. Three copies, written by hand, kept in sync by hope. So when someone renames a field or changes a rule, nothing stops them — and weeks later, the Python team's system crashes in production because their copy quietly no longer matches everyone else's.
 
 Bridge kills the hand-copies. You write the agreement once, in one simple text file (a "contract"), and Bridge acts like a translator + referee:
 
-It translates — from that one file, it automatically generates ready-to-use code for all six languages (Go, Rust, TypeScript, Python, Java, C#). Same rules, every language, guaranteed identical.
-It referees — when you change the contract, Bridge compares old vs. new and says plainly: SAFE, WARNING, or BREAKING. If it's breaking, the change gets blocked before it merges — the rename a human code reviewer would wave through gets caught.
-It remembers — published contracts go into a registry that tracks who uses which contract, so before you change anything you can ask "who does this affect?" and get a real answer instead of doing detective work.
-One-sentence pitch: it's Google Translate for the agreements between software systems, with a referee built in.
+- **It translates** — from that one file, it automatically generates ready-to-use code for all six languages (Go, Rust, TypeScript, Python, Java, C#). Same rules, every language, guaranteed identical.
+- **It referees** — when you change the contract, Bridge compares old vs. new and says plainly: SAFE, WARNING, or BREAKING. If it's breaking, the change gets blocked before it merges — the rename a human code reviewer would wave through gets caught.
+- **It remembers** — published contracts go into a registry that tracks who uses which contract, so before you change anything you can ask "who does this affect?" and get a real answer instead of doing detective work.
+
+> **One-sentence pitch:** it's Google Translate for the agreements between software systems, with a referee built in.
+
 ## The solution
 
 Bridge is a polyglot contract compiler and compatibility platform. You define data and service contracts once in the Bridge IDL. The compiler produces a canonical, hashable IR and from it:
