@@ -1,6 +1,14 @@
+/**
+ * Root layout: document shell only (issue #163).
+ *
+ * The console chrome (sidebar with org scope, demo/live chip) moved into
+ * the `(console)` route group so the `/login` page renders without it.
+ * That is a security requirement, not styling: the shell's sidebar is
+ * populated by an admin-credential registry read (`listOrgs`), and the
+ * login page is the one route unauthenticated visitors see — rendering the
+ * shell there would leak the deployment's org/project surface to them.
+ */
 import type { Metadata, Viewport } from 'next';
-import { AppShell } from '@/components/app-shell';
-import { getRegistryClient, isDemoMode } from '@/lib/registry-client';
 import './globals.css';
 
 const CONSOLE_URL = process.env.NEXT_PUBLIC_CONSOLE_URL ?? 'http://localhost:3000';
@@ -37,30 +45,10 @@ export const viewport: Viewport = {
   colorScheme: 'dark',
 };
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  let orgs: Awaited<ReturnType<typeof getOrgs>> = [];
-  try {
-    orgs = await getOrgs();
-  } catch (err) {
-    // The shell still renders (pages surface the error via their boundary);
-    // the failure is logged so the sidebar silently losing org scope is
-    // diagnosable from server logs.
-    console.error('[dashboard] layout: failed to load orgs for the shell:', err);
-    orgs = [];
-  }
-
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>
-        <AppShell orgs={orgs} demoMode={isDemoMode()}>
-          {children}
-        </AppShell>
-      </body>
+      <body>{children}</body>
     </html>
   );
-}
-
-async function getOrgs() {
-  const client = getRegistryClient();
-  return client.listOrgs();
 }

@@ -25,6 +25,16 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   // Do not advertise the framework version via `X-Powered-By`.
   poweredByHeader: false,
+  // `AUTH_DISABLED` is a non-secret boolean the public demo deployment pins
+  // via `dashboard/vercel.json`'s buildCommand — vercel.json env does not
+  // reach the function *runtime*, so the gate (which runs in the proxy at
+  // request time) reads this value from the build-time inlined literal
+  // instead (issue #163). Only this flag is inlined; every secret
+  // (OIDC_CLIENT_SECRET, SESSION_SECRET, REGISTRY_TOKEN) stays a runtime
+  // env var configured in the deployment settings.
+  env: {
+    AUTH_DISABLED: process.env.AUTH_DISABLED ?? '',
+  },
   async headers() {
     return [{ source: '/:path*', headers: SECURITY_HEADERS }];
   },

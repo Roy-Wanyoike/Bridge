@@ -1,7 +1,7 @@
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import ContractDetailPage from '@/app/contracts/[org]/[project]/[contract]/page';
+import ContractDetailPage from '@/app/(console)/contracts/[org]/[project]/[contract]/page';
 import { holder } from '../helpers/client-holder';
 import { staticRegistryClient, summaryOf } from '../helpers/static-registry';
 

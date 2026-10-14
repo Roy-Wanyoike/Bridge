@@ -52,3 +52,18 @@ vi.mock('next/navigation', async () => {
     },
   };
 });
+
+/**
+ * The auth layer (issue #163) uses WebCrypto (`crypto.subtle`) so the same
+ * code runs in the proxy runtime, route handlers and here. jsdom provides
+ * `window.crypto` with only getRandomValues, shadowing Node's WebCrypto —
+ * patch it once so HMAC signing/verification is exercisable in tests.
+ */
+import { webcrypto } from 'node:crypto';
+if (!globalThis.crypto?.subtle) {
+  Object.defineProperty(globalThis, 'crypto', {
+    value: webcrypto,
+    configurable: true,
+    writable: true,
+  });
+}
