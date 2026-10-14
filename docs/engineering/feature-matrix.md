@@ -193,4 +193,4 @@ agrees with one nuance per row:
 | `verify-ts.sh` / `verify-python.sh` / `verify-ffi.sh` / `verify-events-rpc.sh` in CI | local-only (TESTING.md) | Confirmed — `ci.yml` has no such jobs |
 | Dashboard OIDC gate | issue #163 in flight | Not present in tree yet |
 | Compile-cache CLI wiring | follow-up (TESTING.md) | Confirmed unwired |
-| Test counts (831 + 94 dashboard) | ROADMAP | 831 verified exactly; dashboard now **100** (roadmap figure stale) |
+| Test counts (831 + 94 dashboard) | ROADMAP | 831 verified exactly; dashboard now **167** (roadmap figure was stale — fixed with the #163 PR wave) |

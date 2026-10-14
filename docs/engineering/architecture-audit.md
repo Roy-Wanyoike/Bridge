@@ -28,7 +28,7 @@ bridge/
 │   ├── bridge-cli/              # @bridge/cli         ~2.7k src LOC — 16-command `bridge` CLI
 │   ├── bridge-ffi/              # @bridge/ffi         ~1.3k src LOC — rust-ffi / go-ffi / wasm glue generators
 │   └── bridge-lsp/              # @bridge/lsp         ~1.3k src LOC — JSON-RPC language server over stdio
-├── dashboard/                   # Next.js console (separate lockfile, vitest, 100 tests)
+├── dashboard/                   # Next.js console (separate lockfile, vitest, 167 tests)
 ├── website/                     # Next.js static marketing site (separate lockfile)
 ├── marketing/                   # logo/video/image assets + generation tools
 ├── docs/                        # 10 normative docs + strategy/ (docs-facts-checked in CI)
