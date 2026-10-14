@@ -252,6 +252,7 @@ bridge/
 │   └── bridge-cli/              # The `bridge` command line interface
 ├── examples/                # Eight complete, runnable examples (seven with verified demo runs)
 ├── dashboard/               # Next.js registry console (demo mode + live client)
+├── website/                 # Public marketing site (static export, own Vercel project)
 └── docs/                    # Public documentation + strategy
 ```
 

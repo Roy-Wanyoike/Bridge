@@ -1,0 +1,90 @@
+@import 'tailwindcss';
+
+/*
+ * BRIDGE marketing site — same dark developer-infra theme as the console.
+ * Tokens follow the dashboard's globals.css so the two surfaces read as one
+ * product. Dark-only by design.
+ */
+
+:root {
+  --background: #0a0a0c;
+  --foreground: #f4f4f5;
+  --card: #101013;
+  --secondary: #1c1c20;
+  --muted-foreground: #a1a1aa;
+  --primary: #34d399;
+  --primary-foreground: #052e1c;
+  --border: #232329;
+  --ring: #34d399;
+  --safe: #34d399;
+  --safe-soft: rgba(52, 211, 153, 0.12);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.12);
+  --breaking: #f87171;
+  --breaking-soft: rgba(248, 113, 113, 0.12);
+  --unknown: #c084fc;
+  --unknown-soft: rgba(192, 132, 252, 0.12);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-secondary: var(--secondary);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-border: var(--border);
+  --color-safe: var(--safe);
+  --color-safe-soft: var(--safe-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-breaking: var(--breaking);
+  --color-breaking-soft: var(--breaking-soft);
+  --color-unknown: var(--unknown);
+  --color-unknown-soft: var(--unknown-soft);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-mono:
+    ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  color-scheme: dark;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--safe-soft);
+  color: var(--foreground);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Anchored sections clear the sticky nav. */
+section[id] {
+  scroll-margin-top: 5rem;
+}
