@@ -6,8 +6,9 @@
 # and run a generic to_dict/from_dict round-trip for every dataclass.
 # Exit status: 0 when everything passes, 1 on the first category of failure,
 # and 77 (overridable via SKIP_EXITS) with a "SKIP <reason>" on stderr when
-# python3 is unavailable. NOTE: this gate is local-only — it is not
-# wired into any CI workflow (see docs/TESTING.md).
+# python3 is unavailable. CI: wired into the build-test job of
+# .github/workflows/ci.yml (after the Test step). Still runnable locally:
+# bash scripts/verify-python.sh
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

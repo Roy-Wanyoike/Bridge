@@ -5,8 +5,9 @@
 # cdylib, then runs the Go cgo client's tests AGAINST the built library —
 # proving the buffer protocol, ownership rules, error plumbing and
 # per-method dispatch over the C ABI on this machine. Skips gracefully
-# when Go/Rust are missing. NOTE: this gate is local-only — it is not
-# wired into any CI workflow (see docs/TESTING.md).
+# when Go/Rust are missing. CI: wired into the dedicated verify-ffi job of
+# .github/workflows/ci.yml (Go 1.23 + stable Rust via rust-cache); locally
+# it still exits 0 with a skip message without those toolchains.
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

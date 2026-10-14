@@ -13,13 +13,20 @@ How Bridge tests itself, and how to reproduce any failure deterministically.
 | Fuzz harness | The parser and decoders never crash on hostile input | `packages/bridge-core/src/fuzz/` + `bin/bridge-fuzz` |
 | Cross-language examples | Generated code really runs | `scripts/verify-*.sh`, `examples/` |
 
-The `scripts/verify-*.sh` gates are local-first: Go, Rust, Java and C#
-generated code is additionally compile-verified by dedicated CI jobs, while
-`verify-ts.sh`, `verify-python.sh`, `verify-ffi.sh` and
-`verify-events-rpc.sh` currently run locally only (no CI workflow invokes
-them). Generators also carry committed byte-level snapshot tests plus
-toolchain-gated adversarial compile checks that skip loudly without a local
-toolchain — the same output the CI generator-verify jobs enforce.
+The `scripts/verify-*.sh` gates are local-first and CI-enforced: Go, Rust,
+Java and C# generated code is compile-verified by dedicated generator-verify
+jobs; `verify-ts.sh` and `verify-python.sh` run in the build-test job after
+the Test step; `verify-ffi.sh` runs in a dedicated `verify-ffi` job (Go 1.23
++ stable Rust, mirroring the Go/Rust generator-verify setup — the wasm
+crate check self-skips unless the `wasm32-unknown-unknown` rustup target is
+installed). Only `verify-events-rpc.sh` remains local-only (no CI workflow
+invokes it yet). Generators also carry committed byte-level snapshot tests
+plus toolchain-gated adversarial compile checks that skip loudly without a
+local toolchain — the same output the CI generator-verify jobs enforce.
+
+The dashboard job runs `npm run parity`
+(dashboard/scripts/demo-live-parity.mjs) right after `next build`, so the
+demo dataset can no longer drift from the live REST wire shapes unnoticed.
 
 ## Property-based testing
 
@@ -54,6 +61,33 @@ BRIDGE_PROPERTY_SEED=20260912 BRIDGE_PROPERTY_CASE=137 \
 ```
 
 `BRIDGE_PROPERTY_ITERATIONS=N` raises the iteration count for a deeper run.
+
+## Coverage
+
+Report-only, zero new dependencies. All nine workspace packages run their
+tests on Node's built-in runner (`node --test` over compiled `dist/test`),
+so the build-test CI job adds a second, instrumented pass that prints the
+per-file line/branch/function table into the job log:
+
+```sh
+node --test --experimental-test-coverage packages/*/dist/test/*.test.js \
+  packages/*/dist/test/property/*.test.js
+```
+
+Nothing gates on the numbers — they exist to be eyeballed in CI logs. The
+dashboard suite runs on vitest, where coverage would require adding a new
+dependency, so it is intentionally out of scope for now.
+
+## CI supply-chain scanning
+
+`.github/dependabot.yml` watches three manifest roots weekly — the root npm
+workspace, the dashboard's separate npm app, and the GitHub Actions pins in
+`.github/workflows` — with minor+patch npm updates grouped into single PRs
+and `open-pull-requests-limit: 5` per ecosystem.
+`.github/workflows/codeql.yml` scans the JavaScript/TypeScript surface on
+pushes/PRs to main plus a weekly schedule. NOTE (issue #127): GitHub
+Actions is billing-locked, so none of this has executed remotely yet; both
+activate when Actions runs are re-enabled.
 
 ## Fuzzing the IDL parser
 

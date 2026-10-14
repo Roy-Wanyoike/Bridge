@@ -5,6 +5,9 @@
 # workspace TypeScript compiler over each examples/*/generated/typescript
 # package (strict mode, per its generated tsconfig.json). Asserts 0 errors.
 # Exit status: 0 when everything passes, 1 on any compile error.
+#
+# CI: wired into the build-test job of .github/workflows/ci.yml (after the
+# Test step). Still runnable locally: bash scripts/verify-ts.sh
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
