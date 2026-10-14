@@ -11,6 +11,10 @@
  * (`hashPackage`), idempotent identical republish, `'immutable'` conflict on
  * differing content, and hash re-verification on every pull.
  *
+ * Issued tokens (audit item R1) live in `bridge_tokens` (migration
+ * `0003_tokens.sql`); the service stores only salted SHA-256 hashes, so the
+ * table never contains credential plaintexts.
+ *
  * Integration is gated behind `PG_DSN` (no PostgreSQL server is available in
  * this environment); everything except the live path is unit-tested.
  */
@@ -23,6 +27,7 @@ import type {
   AuditEntry,
   AuditFilter,
   ContractMeta,
+  IssuedTokenRecord,
   PublishInput,
   PublishResult,
   StorageDriver,
@@ -511,6 +516,73 @@ export class PostgresDriver implements StorageDriver {
     return result.rows.map(rowToAuditEntry);
   }
 
+  // ------------------------------------------------------------ issued tokens
+
+  public async createIssuedToken(record: IssuedTokenRecord): Promise<void> {
+    if (typeof record?.id !== 'string' || record.id.length === 0) {
+      throw new TypeError('createIssuedToken(): record.id is required');
+    }
+    const client = await this.conn();
+    try {
+      await client.query(
+        'INSERT INTO bridge_tokens ' +
+          '(id, org_id, name, token_hash, scope, created_at, expires_at, revoked_at, created_by) ' +
+          'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+        [
+          record.id,
+          record.org,
+          record.name ?? null,
+          record.tokenHash,
+          record.scope,
+          record.createdAt,
+          record.expiresAt,
+          record.revokedAt,
+          record.createdBy,
+        ],
+      );
+    } catch (err) {
+      // Unique-violation: the id is already taken (crypto-random collision
+      // or a replayed create) — surface it as the memory driver does.
+      if (isPgError(err) && err.code === '23505') {
+        throw new RegistryError('immutable', `Issued token '${record.id}' already exists`);
+      }
+      throw err;
+    }
+  }
+
+  public async findIssuedTokenById(id: string): Promise<IssuedTokenRecord | null> {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 64) return null;
+    const client = await this.conn();
+    const result = await client.query('SELECT * FROM bridge_tokens WHERE id = $1', [id]);
+    const row = result.rows[0];
+    return row === undefined ? null : rowToIssuedToken(row);
+  }
+
+  public async listIssuedTokens(org: string): Promise<IssuedTokenRecord[]> {
+    assertOrgOrProject(org, 'org');
+    const client = await this.conn();
+    const result = await client.query(
+      'SELECT id, org_id, name, token_hash, scope, created_at, expires_at, revoked_at, created_by ' +
+        'FROM bridge_tokens WHERE org_id = $1 ORDER BY created_at DESC',
+      [org],
+    );
+    return result.rows.map(rowToIssuedToken);
+  }
+
+  public async revokeIssuedToken(org: string, id: string, revokedAt: string): Promise<boolean> {
+    assertOrgOrProject(org, 'org');
+    const client = await this.conn();
+    const result = await client.query(
+      'UPDATE bridge_tokens SET revoked_at = $3 WHERE id = $1 AND org_id = $2 AND revoked_at IS NULL',
+      [id, org, revokedAt],
+    );
+    if ((result.rowCount ?? 0) > 0) return true;
+    // Idempotent revoke: an already-revoked in-org token still counts as
+    // revoked; only a genuinely unknown / foreign-org id returns false.
+    const existing = await client.query('SELECT id FROM bridge_tokens WHERE id = $1 AND org_id = $2', [id, org]);
+    return existing.rows.length > 0;
+  }
+
   // ----------------------------------------------------------------- private
 
   private async findByExactKey(
@@ -646,6 +718,22 @@ function parseIr(text: string | null, meta: ContractMeta): never | import('@brid
     );
   }
   return ir as never;
+}
+
+/** Rehydrate an issued-token record from a `bridge_tokens` row. */
+function rowToIssuedToken(row: Row): IssuedTokenRecord {
+  const record: IssuedTokenRecord = {
+    id: row['id'] as string,
+    org: row['org_id'] as string,
+    tokenHash: row['token_hash'] as string,
+    scope: row['scope'] as IssuedTokenRecord['scope'],
+    createdBy: row['created_by'] as string,
+    createdAt: row['created_at'] as string,
+    expiresAt: row['expires_at'] ?? null,
+    revokedAt: row['revoked_at'] ?? null,
+  };
+  if (typeof row['name'] === 'string' && row['name'].length > 0) record.name = row['name'];
+  return record;
 }
 
 function rowToAuditEntry(row: Row): AuditEntry {

@@ -83,6 +83,44 @@ export function openApiDocument(_options?: RegistryServiceOptions): Record<strin
     },
   };
 
+  const tokenMetaSchema = {
+    type: 'object',
+    required: ['id', 'org', 'scope', 'createdBy', 'createdAt', 'expiresAt', 'revokedAt'],
+    properties: {
+      id: { type: 'string', description: 'Credential id (stable, audit-correlatable).' },
+      org: { type: 'string' },
+      name: { type: 'string', description: 'Optional operator label.' },
+      scope: {
+        type: 'string',
+        enum: ['registry:read', 'registry:publish', 'registry:admin'],
+      },
+      createdBy: { type: 'string', description: 'Principal subject that created the token.' },
+      createdAt: { type: 'string', format: 'date-time' },
+      expiresAt: { type: ['string', 'null'], format: 'date-time' },
+      revokedAt: { type: ['string', 'null'], format: 'date-time' },
+    },
+  };
+
+  const tokenCreateRequestSchema = {
+    type: 'object',
+    properties: {
+      scope: {
+        type: 'string',
+        enum: ['registry:read', 'registry:publish', 'registry:admin'],
+        default: 'registry:read',
+        description: 'Access granted by the token. Defaults to registry:read (least privilege).',
+      },
+      name: { type: 'string', maxLength: 128, description: 'Optional operator label (metadata only).' },
+      expiresAt: { type: 'string', format: 'date-time', description: 'Absolute expiry; must be in the future.' },
+      expiresInDays: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 3650,
+        description: 'Relative expiry (alternative to expiresAt).',
+      },
+    },
+  };
+
   const ok = 'Read succeeded.';
   const security = [{ bearerAuth: [] }];
 
@@ -108,7 +146,12 @@ export function openApiDocument(_options?: RegistryServiceOptions): Record<strin
             'Tokens are bound to one org.',
         },
       },
-      schemas: { Error: errorSchema, ContractMeta: contractMetaSchema },
+      schemas: {
+        Error: errorSchema,
+        ContractMeta: contractMetaSchema,
+        IssuedTokenMeta: tokenMetaSchema,
+        TokenCreateRequest: tokenCreateRequestSchema,
+      },
     },
     paths: {
       '/healthz': {
@@ -116,6 +159,22 @@ export function openApiDocument(_options?: RegistryServiceOptions): Record<strin
           summary: 'Liveness probe (unauthenticated).',
           responses: {
             200: { description: 'Service is up.', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean', const: true } } } } } },
+          },
+        },
+      },
+      '/metrics': {
+        get: {
+          summary: 'Prometheus text exposition of service counters (unauthenticated, not rate-limited).',
+          description:
+            'Counters: bridge_registry_requests_total{route,method,status}, ' +
+            'bridge_registry_auth_failures_total, bridge_registry_rate_limited_total{tier}, ' +
+            'bridge_registry_audit_writes_total{outcome}. Route labels are normalized templates, never raw paths.',
+          responses: {
+            200: {
+              description: 'Prometheus text exposition (version 0.0.4).',
+              content: { 'text/plain': { schema: { type: 'string' } } },
+            },
+            405: { description: 'Only GET is supported.', content: { 'application/json': { schema: errorSchema } } },
           },
         },
       },
@@ -153,6 +212,88 @@ export function openApiDocument(_options?: RegistryServiceOptions): Record<strin
           responses: {
             200: { description: ok },
             403: { description: 'Insufficient scope (registry:admin required).', content: { 'application/json': { schema: errorSchema } } },
+          },
+        },
+      },
+      '/v1/orgs/{org}/tokens': {
+        get: {
+          summary: 'List issued tokens for the org (metadata only — plaintexts and hashes are never listed).',
+          security,
+          parameters: [{ name: 'org', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: {
+              description: ok,
+              content: {
+                'application/json': {
+                  schema: { type: 'object', properties: { tokens: { type: 'array', items: { $ref: '#/components/schemas/IssuedTokenMeta' } } } },
+                },
+              },
+            },
+            401: { description: 'Unauthenticated.', content: { 'application/json': { schema: errorSchema } } },
+            403: { description: 'Insufficient scope (registry:admin required).', content: { 'application/json': { schema: errorSchema } } },
+            404: { description: 'Unknown route or cross-tenant access.', content: { 'application/json': { schema: errorSchema } } },
+          },
+        },
+        post: {
+          summary: 'Mint an issued token (admin only). The plaintext is returned ONCE in this response.',
+          description:
+            'Org-bound (the URL org must be the caller org), optional expiry, optional scope ' +
+            '(default registry:read). Only a salted SHA-256 hash is stored. Issued tokens authenticate ' +
+            'through the same org-bound middleware as static tokens.',
+          security,
+          parameters: [{ name: 'org', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/TokenCreateRequest' } } },
+          },
+          responses: {
+            201: {
+              description: 'Created. `token` is the bearer plaintext — shown exactly once.',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    required: ['token', 'meta'],
+                    properties: { token: { type: 'string' }, meta: { $ref: '#/components/schemas/IssuedTokenMeta' } },
+                  },
+                },
+              },
+            },
+            400: { description: 'Validation failure.', content: { 'application/json': { schema: errorSchema } } },
+            401: { description: 'Unauthenticated.', content: { 'application/json': { schema: errorSchema } } },
+            403: { description: 'Insufficient scope (registry:admin required).', content: { 'application/json': { schema: errorSchema } } },
+            404: { description: 'Unknown route or cross-tenant access.', content: { 'application/json': { schema: errorSchema } } },
+            415: { description: 'Content-Type must be application/json.', content: { 'application/json': { schema: errorSchema } } },
+          },
+        },
+      },
+      '/v1/orgs/{org}/tokens/{tokenId}': {
+        delete: {
+          summary: 'Revoke an issued token (admin only, idempotent). Requests with the revoked token then fail 401.',
+          security,
+          parameters: [
+            { name: 'org', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'tokenId', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { description: 'Revoked (or already revoked).', content: { 'application/json': { schema: { type: 'object', properties: { revoked: { type: 'boolean', const: true }, id: { type: 'string' } } } } } },
+            401: { description: 'Unauthenticated.', content: { 'application/json': { schema: errorSchema } } },
+            403: { description: 'Insufficient scope (registry:admin required).', content: { 'application/json': { schema: errorSchema } } },
+            404: { description: 'Unknown or cross-tenant token.', content: { 'application/json': { schema: errorSchema } } },
+          },
+        },
+      },
+      '/v1/orgs/{org}/projects/{project}': {
+        get: {
+          summary: 'List latest contract metadata for a project (alias of the /contracts listing).',
+          security,
+          parameters: [
+            { name: 'org', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'project', in: 'path', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: { description: ok },
+            404: { description: 'Unknown route or cross-tenant access.', content: { 'application/json': { schema: errorSchema } } },
           },
         },
       },

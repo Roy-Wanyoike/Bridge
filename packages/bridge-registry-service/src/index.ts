@@ -19,7 +19,7 @@
  * ```
  */
 
-export { createServer, start } from './server';
+export { createServer, start, ROUTE_TEMPLATES, ROUTES } from './server';
 export { openApiDocument } from './openapi';
 export {
   DriverAuditBackend,
@@ -30,6 +30,7 @@ export {
 } from './audit';
 export {
   OidcAuthenticator,
+  IssuedTokenAuthenticator,
   assertTokenTable,
   authenticateStaticToken,
   createAuthenticator,
@@ -44,6 +45,21 @@ export {
   ROLE_RANK,
 } from './auth';
 export type { RequestAuthenticator } from './auth';
+export {
+  ISSUED_TOKEN_PREFIX,
+  TOKEN_HASH_PATTERN,
+  TOKEN_NAME_MAX_LENGTH,
+  generateIssuedToken,
+  hashIssuedToken,
+  isTokenExpired,
+  issuedTokenMeta,
+  parseIssuedToken,
+  scopeToAccessLevel,
+  verifyIssuedTokenHash,
+} from './tokens';
+export { MetricsRegistry, METRIC_SPECS } from './metrics';
+export { installJsonLogging, logFormatFromEnv, formatLogLine } from './logging';
+export type { LogFormat } from './logging';
 export { ServiceError, isAuthError, statusForRegistryError } from './errors';
 export type { ServiceErrorCode } from './errors';
 export { TokenBucketLimiter } from './ratelimit';
@@ -82,6 +98,8 @@ export type {
   AuditFilter,
   AuthConfig,
   ContractMeta,
+  IssuedTokenMeta,
+  IssuedTokenRecord,
   Jwk,
   JwksDocument,
   OidcConfig,
@@ -97,5 +115,7 @@ export type {
   SigningConfig,
   StorageDriver,
   StoredContract,
+  TokenScope,
+  TokenStore,
   TokenTable,
 } from './types';

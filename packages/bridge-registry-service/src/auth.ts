@@ -1,12 +1,16 @@
 /**
- * Authentication: static bearer tokens and OIDC JWTs.
+ * Authentication: static bearer tokens, service-issued tokens and OIDC JWTs.
  *
- * Two mechanisms, configurable together (static table consulted first, then
+ * Three mechanisms, configurable together (issued-prefix → static table →
  * JWT verification):
  *
  * - **Static tokens** — a `TokenTable` of raw bearer tokens. This is the
  *   test/dev injection point: no cryptography, roles map 1:1 to scope
  *   levels. Not a production mechanism.
+ * - **Issued tokens** — durable credentials created through the API
+ *   (`bri_…` plaintexts, SHA-256 + per-record salt at rest, optional
+ *   expiry/revocation); verified against the storage driver's token store
+ *   and bound to one org exactly like static tokens (audit item R1).
  * - **OIDC** — RS256/ES256 JWTs verified against a JWKS (fetched from the
  *   issuer and cached per `kid`, or injected statically for tests).
  *   Issuer, audience, expiry (`exp`, with leeway), `nbf`/`iat` sanity and
@@ -19,17 +23,26 @@
 
 import { createPublicKey, verify as cryptoVerify, type JsonWebKey, type KeyObject } from 'node:crypto';
 import { ServiceError } from './errors';
+import {
+  ISSUED_TOKEN_PREFIX,
+  isTokenExpired,
+  parseIssuedToken,
+  scopeToAccessLevel,
+  verifyIssuedTokenHash,
+} from './tokens';
 import { isValidOrgOrProject } from './validation';
 import {
   SCOPES,
   type AccessLevel,
   type AuthConfig,
+  type IssuedTokenRecord,
   type Jwk,
   type JwksDocument,
   type OidcConfig,
   type Principal,
   type RegistryRole,
   type RegistryTokenInfo,
+  type TokenStore,
   type TokenTable,
 } from './types';
 
@@ -225,6 +238,71 @@ export function requireLevel(principal: Principal, needed: AccessLevel): void {
       `credentials '${principal.scopes.join(', ')}' are not permitted for this operation ` +
         `(requires ${needed === Levels.read ? SCOPES.read : needed === Levels.publish ? SCOPES.publish : SCOPES.admin})`,
     );
+  }
+}
+
+// ----------------------------------------------------------- issued tokens
+
+/**
+ * Authenticator for service-issued tokens (audit item R1): bearer plaintexts
+ * with the reserved {@link ISSUED_TOKEN_PREFIX} are resolved against a
+ * {@link TokenStore}, re-hashed with the record's salt and compared in
+ * constant time. Fail-closed: unknown ids, mismatched secrets, revoked and
+ * expired records all produce 401.
+ *
+ * Issued principals flow through the SAME org-bound authorization checks as
+ * static tokens (`Principal.org` is the record's org binding) and carry a
+ * per-credential audit identity (`subject` = `token:<org>/<id>` plus
+ * `tokenId`), so audit rows distinguish individual credentials.
+ */
+export class IssuedTokenAuthenticator {
+  private readonly now: () => number;
+
+  public constructor(
+    private readonly store: TokenStore,
+    opts: { now?: () => number } = {},
+  ) {
+    this.now = opts.now ?? (() => Date.now());
+  }
+
+  /** True when the header carries a plaintext in the issued-token format. */
+  public static looksIssued(authorization: string | undefined): boolean {
+    if (typeof authorization !== 'string') return false;
+    const space = authorization.indexOf(' ');
+    if (space <= 0) return false;
+    if (authorization.slice(0, space).toLowerCase() !== 'bearer') return false;
+    return authorization.slice(space + 1).trimStart().startsWith(ISSUED_TOKEN_PREFIX);
+  }
+
+  /**
+   * Verify the bearer token against the token store. Throws 401 on every
+   * failure for issued-format tokens; callers route ONLY issued-format
+   * plaintexts here (see {@link looksIssued}).
+   */
+  public async authenticate(authorization: string | undefined): Promise<Principal> {
+    const plaintext = extractBearerToken(authorization);
+    const parsed = parseIssuedToken(plaintext);
+    if (parsed === null) {
+      throw unauthenticated('missing or invalid bearer token');
+    }
+    const record: IssuedTokenRecord | null = await this.store.findIssuedTokenById(parsed.id);
+    if (record === null || !verifyIssuedTokenHash(plaintext, record.tokenHash)) {
+      throw unauthenticated('missing or invalid bearer token');
+    }
+    if (record.revokedAt !== null) {
+      throw unauthenticated('token has been revoked');
+    }
+    if (isTokenExpired(record.expiresAt, this.now())) {
+      throw unauthenticated('token has expired');
+    }
+    return {
+      kind: 'token',
+      subject: `token:${record.org}/${record.id}`,
+      org: record.org,
+      level: scopeToAccessLevel(record.scope),
+      scopes: [record.scope],
+      tokenId: record.id,
+    };
   }
 }
 
@@ -665,8 +743,13 @@ async function defaultFetchJwks(url: string): Promise<JwksDocument> {
  *
  * When both are configured, static tokens are consulted first (exact match),
  * and non-matching tokens fall through to JWT verification.
+ *
+ * When `issuedTokens` (a {@link TokenStore}, i.e. the storage driver) is
+ * given, plaintexts carrying the reserved issued-token prefix are verified
+ * against the store BEFORE the bootstrap mechanisms run (audit item R1);
+ * every other bearer falls through to static/OIDC unchanged.
  */
-export function createAuthenticator(auth: AuthConfig | undefined): RequestAuthenticator {
+export function createAuthenticator(auth: AuthConfig | undefined, issuedTokens?: TokenStore): RequestAuthenticator {
   const hasTokens = auth !== undefined && auth.tokens !== undefined && Object.keys(auth.tokens).length > 0;
   const hasOidc = auth !== undefined && auth.oidc !== undefined;
   if (!hasTokens && !hasOidc) {
@@ -678,19 +761,31 @@ export function createAuthenticator(auth: AuthConfig | undefined): RequestAuthen
   const oidc = hasOidc ? new OidcAuthenticator(auth!.oidc!) : undefined;
   const tokens = hasTokens ? auth!.tokens! : undefined;
 
+  let base: RequestAuthenticator;
   if (tokens !== undefined && oidc === undefined) {
-    return { authenticate: (authorization) => Promise.resolve(authenticateStaticToken(tokens, authorization)) };
+    base = { authenticate: (authorization) => Promise.resolve(authenticateStaticToken(tokens, authorization)) };
+  } else if (tokens === undefined && oidc !== undefined) {
+    base = oidc;
+  } else {
+    base = {
+      authenticate: async (authorization) => {
+        try {
+          return authenticateStaticToken(tokens!, authorization);
+        } catch {
+          return oidc!.authenticate(authorization);
+        }
+      },
+    };
   }
-  if (tokens === undefined && oidc !== undefined) {
-    return oidc;
-  }
+
+  if (issuedTokens === undefined) return base;
+  const issued = new IssuedTokenAuthenticator(issuedTokens);
   return {
     authenticate: async (authorization) => {
-      try {
-        return authenticateStaticToken(tokens!, authorization);
-      } catch {
-        return oidc!.authenticate(authorization);
+      if (IssuedTokenAuthenticator.looksIssued(authorization)) {
+        return issued.authenticate(authorization);
       }
+      return base.authenticate(authorization);
     },
   };
 }
