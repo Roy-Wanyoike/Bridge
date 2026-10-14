@@ -47,6 +47,15 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Verify generated TypeScript (verify-ts.sh)
+        run: bash scripts/verify-ts.sh
+
+      - name: Verify generated Python (verify-python.sh)
+        run: bash scripts/verify-python.sh
+
+      - name: Coverage report (node:test built-in, report-only — nothing gates on it)
+        run: node --test --experimental-test-coverage packages/*/dist/test/*.test.js packages/*/dist/test/property/*.test.js
+
   go-generator-verify:
     name: Verify generated Go code
     runs-on: ubuntu-latest
@@ -118,6 +127,26 @@ jobs:
       - name: Generate + dotnet build + round-trip C# output
         run: bash scripts/verify-csharp.sh
 
+  verify-ffi:
+    name: Verify FFI glue (Rust cdylib + Go cgo client)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm run build
+      - name: Generate FFI glue + cargo build + go test over the C ABI
+        run: bash scripts/verify-ffi.sh
+
   dashboard:
     name: Dashboard (lint + typecheck + build + test)
     runs-on: ubuntu-latest
@@ -139,6 +168,8 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+      - name: Demo/live parity check
+        run: npm run parity
       - name: Test
         run: npm test
 

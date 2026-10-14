@@ -11,6 +11,10 @@
 #   6. TS dispatcher decodes a Python-emitted event envelope (cross-language events)
 #
 # Usage: scripts/verify-events-rpc.sh
+#
+# NOTE: this gate is local-only — it is not wired into any CI workflow
+# (see docs/TESTING.md); it needs npx tsx + real TCP loopback and is left
+# as a developer-run gate for now.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
