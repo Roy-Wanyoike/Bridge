@@ -3,11 +3,11 @@
 A [Language Server Protocol 3.17](https://microsoft.github.io/language-server-protocol/)
 implementation for the Bridge IDL. JSON-RPC over stdio with **hand-rolled
 framing and zero runtime dependencies** beyond `@bridge/core` (the compiler).
-No `vscode-languageserver`, no LSP framework — ~700 lines of TypeScript.
+No `vscode-languageserver`, no LSP framework — ~2200 lines of TypeScript.
 
 ```
 npm run build --workspace @bridge/lsp
-npm test  --workspace @bridge/lsp   # 33 tests, driven over in-memory duplexes
+npm test  --workspace @bridge/lsp   # 72 tests, driven over in-memory duplexes
 ```
 
 ## Running
@@ -94,6 +94,10 @@ args: ["${workspaceFolder}/packages/bridge-lsp/dist/bin/bridge-lsp.js"]
 | `documentFormattingProvider` | `true` | One full-document `TextEdit` from the canonical formatter |
 | `documentDiagnosticProvider` | `true` | Pull mode: full report (`textDocument/diagnostic`) |
 | `completionProvider` | `{ resolveProvider: false, triggerCharacters: [] }` | Keywords + primitives + document types |
+| `definitionProvider` | `true` | Jump from an unqualified (or self-qualified) type reference to its declaration in the same document; also answers on declaration and member names |
+| `referencesProvider` | `true` | Every same-file usage of the symbol under the cursor; `context.includeDeclaration` honored |
+| `documentSymbolProvider` | `true` | Hierarchical outline: structs / enums / unions / aliases / services / events, with fields, variants and methods as children |
+| `renameProvider` | `{ prepareProvider: true }` | Single-document rename of type declarations (declaration + all same-file references), with identifier/keyword/collision checks |
 
 Plus push diagnostics: every `didOpen` / `didChange` / `didSave` publishes
 `textDocument/publishDiagnostics` computed by the real Bridge compiler
@@ -135,13 +139,16 @@ UTF-16 code unit(s).
 | File | Role |
 | --- | --- |
 | `src/jsonrpc.ts` | `Content-Length` framing (byte-accurate UTF-8), incremental `MessageReader`, `writeMessage` |
-| `src/protocol.ts` | The hand-rolled LSP 3.17 subset used by v1 |
+| `src/protocol.ts` | The hand-rolled LSP 3.17 subset used by the server |
 | `src/positions.ts` | bridge-core ↔ LSP position mapping + word/range utilities |
+| `src/symbols.ts` | AST symbol index behind definition / references / documentSymbol / rename |
 | `src/render.ts` | IR → Bridge IDL text (hover markdown, completion details) |
 | `src/server.ts` | `BridgeLspServer`: document store, compile, all handlers |
 | `src/connection.ts` | `createConnection(readable, writable, options?)` transport wiring |
 | `src/bin/bridge-lsp.ts` | stdio entry point |
-| `src/test/lsp.test.ts` | 33 tests over in-memory duplexes |
+| `src/test/lsp.test.ts` | 38 tests: framing, position mapping, diagnostics, hover, completion, lifecycle |
+| `src/test/navigation.test.ts` | 34 tests: definition, references, documentSymbol, rename |
+| `src/test/harness.ts` | shared in-memory duplex client (not a test file) |
 
 `createConnection` accepts **any** duplex pair — pass `process.stdin`/`process.stdout`
 in production or `PassThrough` streams in tests (the test suite does exactly
@@ -155,15 +162,28 @@ that, exercising the server precisely like an editor would).
 - **Full-sync only.** `textDocument/didChange` expects whole-document text;
   incremental range edits are ignored (the advertised `change: 1` matches).
 - **Single-file scope.** Cross-package imports are not resolved: hover,
-  completion and diagnostics only know the current document (plus, for
-  hover/completion, the last cleanly compiled IR of that document while it
-  is temporarily broken). `import`ed packages contribute nothing yet.
+  completion, diagnostics AND navigation only know the current document
+  (plus, for hover/completion, the last cleanly compiled IR of that document
+  while it is temporarily broken). `textDocument/definition` and `references`
+  are same-file only — a qualified reference like `identity.v1.User` answers
+  `null` / excludes the reference, *except* a reference qualified by the
+  file's OWN package (`shop.v1.Item` inside `package shop.v1`), which the
+  compiler itself resolves locally (see `semantic.ts`). There is no workspace
+  index, no multi-file rename, no `workspace/symbol`.
 - **Diagnostics push on open/change/save + pull full reports** — no
   workspace-wide diagnostics, no `workspace/diagnostic/refresh` and no
   related-document reports.
-- **No semantic tokens, go-to-definition, references, rename, or code
-  actions.** Hover answers named types only (structs, enums, unions,
-  aliases); fields, services, methods and events are not hover targets.
+- **No semantic tokens or code actions.** Hover answers named types only
+  (structs, enums, unions, aliases); fields, services, methods and events are
+  not hover targets.
+- **Navigation is parse-based, not IR-based.** Definition, references,
+  documentSymbol and rename keep working while a document has semantic
+  errors (unknown types, duplicates, …) because they read the recovered AST.
+  Rename answers type declarations only — services, events, fields, enum
+  variants and methods have no same-file call sites beyond their own
+  declaration, so a single-site rename would be misleading (`prepareRename`
+  answers `null` for them). Rename rejects non-identifiers, keywords and
+  names that would collide with another declaration (the BR2002 rule).
 - **Formatting is opinionated.** Client options (`tabSize`, `insertSpaces`)
   are ignored — the canonical formatter is canonical. Documents with syntax
   errors answer `null` (no edit) rather than a best-effort format.

@@ -16,6 +16,12 @@
  * - `exit` → invokes the exit handler with 0 after `shutdown`, 1 otherwise.
  * - `$/cancelNotification` and other `$/…` notifications are accepted and
  *   ignored (v1: requests are synchronous and not cancellable).
+ *
+ * Navigation (definition/references/documentSymbol/rename) is AST-based —
+ * see symbols.ts. It keeps working on documents with semantic errors (the
+ * parse recovers) and answers `null` / `[]` — never an error — for
+ * unresolved symbols, unopened documents and cursor positions that are not
+ * on a symbol name.
  */
 
 import {
@@ -36,18 +42,35 @@ import {
   type Hover,
   type CompletionItem,
   type InitializeResult,
+  type Location,
   type LspDiagnostic,
+  type PrepareRenameResult,
   type PublishDiagnosticsParams,
+  type Range,
   type TextEdit,
+  type WorkspaceEdit,
 } from './protocol';
 import {
   diagnosticRangeAt,
   fullDocumentRange,
   identifierAt,
+  textAtRange,
   toLspPosition,
   wordPrefixAt,
 } from './positions';
 import { typeDeclToText } from './render';
+import {
+  buildSymbolIndex,
+  declAtPosition,
+  documentSymbols,
+  findDeclByName,
+  isTypeDeclSymbol,
+  localRefsTo,
+  memberAtPosition,
+  typeRefAtPosition,
+  type DeclSymbol,
+  type SymbolIndex,
+} from './symbols';
 import { ErrorCodes, type JsonRpcErrorBody, type JsonRpcMessage } from './jsonrpc';
 
 export const SERVER_NAME = 'bridge-lsp';
@@ -93,6 +116,8 @@ export class BridgeLspServer {
   private readonly documents = new Map<string, OpenDocument>();
   /** Last successfully compiled IR per URI — powers hover/completion while a document is broken. */
   private readonly lastGoodIr = new Map<string, IRPackage>();
+  /** Parsed symbol index per URI, re-derived only when the text changed. */
+  private readonly symbolIndexes = new Map<string, { text: string; index: SymbolIndex }>();
   private initialized = false;
   private shutdownRequested = false;
   private disposed = false;
@@ -129,6 +154,7 @@ export class BridgeLspServer {
     this.disposed = true;
     this.documents.clear();
     this.lastGoodIr.clear();
+    this.symbolIndexes.clear();
   }
 
   private dispatchRequest(method: string, params: unknown, id: number | string | null): void {
@@ -159,6 +185,16 @@ export class BridgeLspServer {
         return this.completion(id, params);
       case Methods.DocumentDiagnostic:
         return this.pullDiagnostics(id, params);
+      case Methods.Definition:
+        return this.definition(id, params);
+      case Methods.References:
+        return this.references(id, params);
+      case Methods.DocumentSymbol:
+        return this.documentSymbol(id, params);
+      case Methods.PrepareRename:
+        return this.prepareRename(id, params);
+      case Methods.Rename:
+        return this.rename(id, params);
       default:
         return this.respondError(id, ErrorCodes.MethodNotFound, `Method not found: ${method}`);
     }
@@ -254,6 +290,7 @@ export class BridgeLspServer {
     const uri = parsed.textDocument.uri;
     this.documents.delete(uri);
     this.lastGoodIr.delete(uri);
+    this.symbolIndexes.delete(uri);
     // Clear any diagnostics the editor is still showing for this document.
     this.sendNotification(Methods.PublishDiagnostics, { uri, diagnostics: [] } satisfies PublishDiagnosticsParams);
   }
@@ -278,10 +315,8 @@ export class BridgeLspServer {
     const range = identifierAt(doc.text, parsed.position);
     if (range === undefined) return this.respond(id, null);
 
-    const word = doc.text
-      .split('\n')[range.start.line]
-      ?.slice(range.start.character, range.end.character);
-    if (word === undefined || word === '') return this.respond(id, null);
+    const word = textAtRange(doc.text, range);
+    if (word === '') return this.respond(id, null);
 
     // Compile the CURRENT text; while it is broken, fall back to the last
     // clean IR so hover keeps working across an editing mistake.
@@ -295,6 +330,214 @@ export class BridgeLspServer {
       range,
     };
     this.respond(id, hover);
+  }
+
+  // ------------------------------------------------------------ navigation
+
+  /**
+   * The parsed symbol index for a document, re-derived only when the text
+   * changed since the last navigation request on this URI.
+   */
+  private symbolIndexFor(doc: OpenDocument): SymbolIndex {
+    const cached = this.symbolIndexes.get(doc.uri);
+    if (cached !== undefined && cached.text === doc.text) return cached.index;
+    const index = buildSymbolIndex(doc.text);
+    this.symbolIndexes.set(doc.uri, { text: doc.text, index });
+    return index;
+  }
+
+  /**
+   * `textDocument/definition`: jump from an unqualified type reference (or
+   * from a declaration / member name itself) to the declaration, in the SAME
+   * document. Qualified references (`pkg.Name`), unresolved names and
+   * non-symbol positions answer `null` — cross-file navigation is out of
+   * scope (see README, "Honest v1 limits").
+   */
+  private definition(id: number | string | null, params: unknown): void {
+    const parsed = hoverParams(params);
+    if (parsed === undefined) {
+      return this.respondError(id, ErrorCodes.InvalidParams, 'Invalid params: expected { textDocument: { uri }, position }.');
+    }
+    const doc = this.documents.get(parsed.textDocument.uri);
+    if (doc === undefined) return this.respond(id, null);
+
+    const index = this.symbolIndexFor(doc);
+    const range = this.definitionRange(index, doc, parsed.position);
+    return this.respond(id, range === undefined ? null : ({ uri: doc.uri, range } satisfies Location));
+  }
+
+  /** The range `textDocument/definition` should jump to, if any. */
+  private definitionRange(index: SymbolIndex, doc: OpenDocument, position: { line: number; character: number }): Range | undefined {
+    // Order matters: a field can share its name with a type, so the more
+    // specific positions (declaration name, member name) win over references.
+    const decl = declAtPosition(index, position);
+    if (decl !== undefined) return decl.nameRange;
+
+    const member = memberAtPosition(index, position);
+    if (member !== undefined) return member.nameRange;
+
+    const ref = typeRefAtPosition(index, position);
+    if (ref === undefined) return undefined;
+    if (ref.package !== undefined && ref.package !== index.packageName) return undefined; // cross-package
+    if (wordUnderCursor(doc.text, position) !== ref.name) return undefined; // on a package segment
+    return findDeclByName(index, ref.name)?.nameRange;
+  }
+
+  /**
+   * `textDocument/references`: every unqualified usage of the symbol under
+   * the cursor, plus its declaration when `context.includeDeclaration` is
+   * set. Members (fields / variants / methods) are only ever used at their
+   * declaration. Answers `[]` — never an error — for unresolved names,
+   * keywords and whitespace.
+   */
+  private references(id: number | string | null, params: unknown): void {
+    const parsed = referencesParams(params);
+    if (parsed === undefined) {
+      return this.respondError(id, ErrorCodes.InvalidParams, 'Invalid params: expected { textDocument: { uri }, position, context }.');
+    }
+    const doc = this.documents.get(parsed.textDocument.uri);
+    if (doc === undefined) return this.respond(id, []);
+
+    const index = this.symbolIndexFor(doc);
+    const ranges = this.referenceRanges(index, doc.text, parsed.position, parsed.includeDeclaration);
+    const locations = ranges
+      .slice()
+      .sort(rangeOrder)
+      .map((range): Location => ({ uri: doc.uri, range }));
+    return this.respond(id, locations);
+  }
+
+  /** The ranges `textDocument/references` should report, in no particular order. */
+  private referenceRanges(
+    index: SymbolIndex,
+    text: string,
+    position: { line: number; character: number },
+    includeDeclaration: boolean,
+  ): Range[] {
+    const usagesOf = (decl: DeclSymbol): Range[] => {
+      const refs = localRefsTo(index, decl.name).map((r) => r.nameRange);
+      return includeDeclaration ? [decl.nameRange, ...refs] : refs;
+    };
+
+    const decl = declAtPosition(index, position);
+    if (decl !== undefined) return usagesOf(decl);
+
+    const member = memberAtPosition(index, position);
+    if (member !== undefined) return includeDeclaration ? [member.nameRange] : [];
+
+    const ref = typeRefAtPosition(index, position);
+    if (ref === undefined) return [];
+    if (ref.package !== undefined && ref.package !== index.packageName) return []; // cross-package
+    if (wordUnderCursor(text, position) !== ref.name) return [];
+
+    const target = findDeclByName(index, ref.name);
+    if (target !== undefined) return usagesOf(target);
+
+    // Unresolved name: the same-named same-file references are all the
+    // usages there are (there is no declaration to include).
+    return localRefsTo(index, ref.name).map((r) => r.nameRange);
+  }
+
+  /**
+   * `textDocument/documentSymbol`: the hierarchical outline (structs, enums,
+   * unions, aliases, services, events; fields / variants / methods as
+   * children). Parse-based, so it keeps working while the document has
+   * errors; a document that is not open answers `[]`.
+   */
+  private documentSymbol(id: number | string | null, params: unknown): void {
+    const parsed = documentIdentifierParams(params);
+    if (parsed === undefined) {
+      return this.respondError(id, ErrorCodes.InvalidParams, 'Invalid params: expected { textDocument: { uri } }.');
+    }
+    const doc = this.documents.get(parsed.textDocument.uri);
+    if (doc === undefined) return this.respond(id, []);
+
+    const index = this.symbolIndexFor(doc);
+    return this.respond(id, documentSymbols(doc.text, index));
+  }
+
+  // ---------------------------------------------------------------- rename
+
+  /**
+   * The type declaration renamable at this position: reached via its own
+   * declaration name, an unqualified reference, or a self-qualified
+   * reference (`pkg.Type` — bridge-core resolves those locally). v1 renames
+   * TYPE declarations only — services, events and members have no same-file
+   * call sites, so a single-site rename would be misleading (see README).
+   */
+  private renamableTypeAt(doc: OpenDocument, position: { line: number; character: number }): { index: SymbolIndex; decl: DeclSymbol } | undefined {
+    const index = this.symbolIndexFor(doc);
+
+    const decl = declAtPosition(index, position);
+    if (decl !== undefined) return isTypeDeclSymbol(decl) ? { index, decl } : undefined;
+
+    const ref = typeRefAtPosition(index, position);
+    if (ref === undefined) return undefined;
+    if (ref.package !== undefined && ref.package !== index.packageName) return undefined;
+    if (wordUnderCursor(doc.text, position) !== ref.name) return undefined;
+    const target = findDeclByName(index, ref.name);
+    return target !== undefined && isTypeDeclSymbol(target) ? { index, decl: target } : undefined;
+  }
+
+  /**
+   * `textDocument/prepareRename`: the name range + placeholder for a
+   * renamable type symbol, `null` everywhere else.
+   */
+  private prepareRename(id: number | string | null, params: unknown): void {
+    const parsed = hoverParams(params);
+    if (parsed === undefined) {
+      return this.respondError(id, ErrorCodes.InvalidParams, 'Invalid params: expected { textDocument: { uri }, position }.');
+    }
+    const doc = this.documents.get(parsed.textDocument.uri);
+    if (doc === undefined) return this.respond(id, null);
+
+    const target = this.renamableTypeAt(doc, parsed.position);
+    if (target === undefined) return this.respond(id, null);
+    return this.respond(id, { range: target.decl.nameRange, placeholder: target.decl.name } satisfies PrepareRenameResult);
+  }
+
+  /**
+   * `textDocument/rename` (single document): rewrites the declaration name
+   * and every same-file unqualified reference. Rejects non-identifiers,
+   * keywords and names that would collide with another declaration in the
+   * file (the same rule bridge-core's BR2002 enforces).
+   */
+  private rename(id: number | string | null, params: unknown): void {
+    const parsed = renameParams(params);
+    if (parsed === undefined) {
+      return this.respondError(id, ErrorCodes.InvalidParams, 'Invalid params: expected { textDocument: { uri }, position, newName }.');
+    }
+    const doc = this.documents.get(parsed.textDocument.uri);
+    if (doc === undefined) return this.respond(id, null);
+
+    const newName = parsed.newName;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName) || KEYWORDS.has(newName)) {
+      return this.respondError(
+        id,
+        ErrorCodes.InvalidParams,
+        `Cannot rename: '${newName}' is not a valid Bridge identifier.`,
+      );
+    }
+
+    const target = this.renamableTypeAt(doc, parsed.position);
+    if (target === undefined) return this.respond(id, null);
+
+    const index = target.index;
+    const collision = index.decls.find((d) => d !== target.decl && d.name === newName);
+    if (collision !== undefined) {
+      return this.respondError(
+        id,
+        ErrorCodes.InvalidParams,
+        `Cannot rename: '${newName}' is already declared in this document (${collision.kind} ${collision.name}).`,
+      );
+    }
+
+    const edits = [target.decl.nameRange, ...localRefsTo(index, target.decl.name).map((r) => r.nameRange)]
+      .slice()
+      .sort(rangeOrder)
+      .map((range): TextEdit => ({ range, newText: newName }));
+    const workspaceEdit: WorkspaceEdit = { changes: { [doc.uri]: edits } };
+    return this.respond(id, workspaceEdit);
   }
 
   // ------------------------------------------------------------ formatting
@@ -437,6 +680,10 @@ function initializeResult(): InitializeResult {
       hoverProvider: true,
       documentFormattingProvider: true,
       documentDiagnosticProvider: true,
+      definitionProvider: true,
+      referencesProvider: true,
+      documentSymbolProvider: true,
+      renameProvider: { prepareProvider: true },
       completionProvider: {
         resolveProvider: false,
         triggerCharacters: [], // no trigger characters in v1
@@ -550,6 +797,44 @@ function hoverParams(params: unknown): {
   if (doc === undefined || !isRecord(position)) return undefined;
   if (typeof position.line !== 'number' || typeof position.character !== 'number') return undefined;
   return { textDocument: doc, position: { line: position.line, character: position.character } };
+}
+
+function referencesParams(params: unknown): {
+  textDocument: { uri: string };
+  position: { line: number; character: number };
+  includeDeclaration: boolean;
+} | undefined {
+  if (!isRecord(params)) return undefined;
+  const base = hoverParams(params);
+  if (base === undefined) return undefined;
+  // LSP makes `context` required; a lenient server treats its absence as
+  // `includeDeclaration: false` rather than rejecting the request.
+  const context = params.context;
+  return { ...base, includeDeclaration: isRecord(context) && context.includeDeclaration === true };
+}
+
+function renameParams(params: unknown): {
+  textDocument: { uri: string };
+  position: { line: number; character: number };
+  newName: string;
+} | undefined {
+  if (!isRecord(params) || typeof params.newName !== 'string') return undefined;
+  const base = hoverParams(params);
+  return base === undefined ? undefined : { ...base, newName: params.newName };
+}
+
+// ------------------------------------------------------ navigation helpers
+
+/** The identifier under the cursor, or `undefined` when not on one. */
+function wordUnderCursor(text: string, position: { line: number; character: number }): string | undefined {
+  const range = identifierAt(text, position);
+  return range === undefined ? undefined : textAtRange(text, range);
+}
+
+/** Document order for reference lists and rename edits. */
+function rangeOrder(a: Range, b: Range): number {
+  if (a.start.line !== b.start.line) return a.start.line - b.start.line;
+  return a.start.character - b.start.character;
 }
 
 /** Markdown payload for a hover: docs blockquote + ```bridge declaration. */

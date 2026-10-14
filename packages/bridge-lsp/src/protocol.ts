@@ -55,6 +55,11 @@ export interface ServerCapabilities {
     resolveProvider: boolean;
     triggerCharacters: string[];
   };
+  definitionProvider: boolean;
+  referencesProvider: boolean;
+  documentSymbolProvider: boolean;
+  /** `prepareProvider` — the server answers `textDocument/prepareRename` first. */
+  renameProvider: { prepareProvider: boolean };
 }
 
 export interface InitializeResult {
@@ -170,6 +175,76 @@ export interface CompletionParams {
   position: Position;
 }
 
+// ------------------------------------------------- navigation + rename
+
+/** A location in a document — the answer shape of definition/references. */
+export interface Location {
+  uri: string;
+  range: Range;
+}
+
+/** `SymbolKind` values (LSP 3.17) used by `textDocument/documentSymbol`. */
+export const SymbolKind = {
+  File: 1,
+  Module: 2,
+  Namespace: 3,
+  Package: 4,
+  Class: 5,
+  Method: 6,
+  Property: 7,
+  Field: 8,
+  Constructor: 9,
+  Enum: 10,
+  Interface: 11,
+  Function: 12,
+  Variable: 13,
+  Constant: 14,
+  String: 15,
+  Number: 16,
+  Boolean: 17,
+  Array: 18,
+  Object: 19,
+  Key: 20,
+  Null: 21,
+  EnumMember: 22,
+  Struct: 23,
+  Event: 24,
+  Operator: 25,
+  TypeParameter: 26,
+} as const;
+
+/**
+ * Hierarchical document symbol (`textDocument/documentSymbol`). `range`
+ * encloses the whole declaration, `selectionRange` covers the name — the
+ * range an editor reveals when the symbol is picked from the outline.
+ */
+export interface DocumentSymbol {
+  name: string;
+  detail?: string;
+  kind: number; // SymbolKind
+  range: Range;
+  selectionRange: Range;
+  children?: DocumentSymbol[];
+}
+
+/** `context` of `textDocument/references` (LSP 3.17 — required, but the
+ *  server is lenient and treats a missing context as `false`). */
+export interface ReferenceContext {
+  includeDeclaration: boolean;
+}
+
+/** First phase of a rename: is the symbol renamable, and where is its name? */
+export interface PrepareRenameResult {
+  /** Range of the symbol name the rename would replace. */
+  range: Range;
+  placeholder: string;
+}
+
+/** A workspace-scoped edit; this server only ever touches one document. */
+export interface WorkspaceEdit {
+  changes: Record<string, TextEdit[]>;
+}
+
 // ------------------------------------------------------------ method names
 
 /** Every LSP method name this server sends or handles. */
@@ -189,4 +264,9 @@ export const Methods = {
   Formatting: 'textDocument/formatting',
   Completion: 'textDocument/completion',
   DocumentDiagnostic: 'textDocument/diagnostic',
+  Definition: 'textDocument/definition',
+  References: 'textDocument/references',
+  DocumentSymbol: 'textDocument/documentSymbol',
+  PrepareRename: 'textDocument/prepareRename',
+  Rename: 'textDocument/rename',
 } as const;
