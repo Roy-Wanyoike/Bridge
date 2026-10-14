@@ -169,7 +169,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist/release
           merge-multiple: true
@@ -241,7 +241,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist/release
           merge-multiple: true
@@ -335,7 +335,7 @@ jobs:
       - name: Prepare
         run: echo "IMAGE=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_ENV"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
