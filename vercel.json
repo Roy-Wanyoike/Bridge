@@ -1,0 +1,35 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "app": {
+      "root": ".",
+      "runtime": "container"
+    },
+    "dashboard": {
+      "root": "dashboard",
+      "framework": "nextjs"
+    },
+    "bridge-lsp": {
+      "root": "packages/bridge-lsp",
+      "runtime": "node"
+    },
+    "bridge-registry-service": {
+      "root": "packages/bridge-registry-service",
+      "runtime": "node"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/dashboard/(.*)",
+      "destination": {
+        "service": "dashboard"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "app"
+      }
+    }
+  ]
+}
