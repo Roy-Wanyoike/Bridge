@@ -10,7 +10,7 @@
 [![CI](https://github.com/Roy-Wanyoike/bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Roy-Wanyoike/bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](package.json)
-[![Tests](https://img.shields.io/badge/tests-831%20%2B%2094-success)](#status)
+[![Tests](https://img.shields.io/badge/tests-912%20%2B%20167-success)](#status)
 
 > **One contract. Every language. Zero interoperability drift.**
 >
@@ -137,15 +137,17 @@ Every target below is generated from the same IR — types, enums, tagged unions
 
 Generated Go, Rust, Java and C# are compile-verified in CI against the
 runnable examples (dedicated generator-verify jobs); TypeScript and Python
-output is verified by local scripts (`scripts/verify-ts.sh`,
-`scripts/verify-python.sh`) that are not wired into any CI workflow. Every
+output is verified in CI's build-test job (`scripts/verify-ts.sh`,
+`scripts/verify-python.sh`), and the Go↔Rust FFI has its own `verify-ffi`
+CI job (Go 1.23 + stable Rust). Only `scripts/verify-events-rpc.sh` remains
+a local-only gate. Every
 generated package ships a round-trip test. The FFI layer additionally
 carries **service methods** across the boundary —
 see [docs/FFI.md](docs/FFI.md).
 
 ## Status
 
-**Bridge 0.2.1 — the roadmap through Phase 3 is shipped and tested: 831 tests green across nine packages (CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112), plus a separate 167-test dashboard suite (`cd dashboard && npm test`), generated Go/Rust/Java/C# compile-verified in CI, the Go↔Rust FFI proven end to end on real builds, and the CLI publishes to the registry service over HTTP — with optional ed25519 signing for required-mode services and recorded generated-language metadata that lights up the dashboard's live badges.** Generators now diagnose per-language identifier collisions instead of emitting non-compiling code, and sets serialize in a canonical, language-independent order — byte-determinism guarantees (see [docs/SERIALIZATION.md](docs/SERIALIZATION.md)). See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
+**Bridge 0.2.1 — the roadmap through Phase 3 is shipped and tested: 912 tests green across nine packages (CLI 148, compat 109, core 172, FFI 12, generators 92, LSP 72, registry 65, registry-service 130, serialization 112), plus a separate 167-test dashboard suite (`cd dashboard && npm test`), generated Go/Rust/Java/C# compile-verified in CI, the Go↔Rust FFI proven end to end on real builds, and the CLI publishes to the registry service over HTTP — with optional ed25519 signing for required-mode services and recorded generated-language metadata that lights up the dashboard's live badges.** Generators now diagnose per-language identifier collisions instead of emitting non-compiling code, and sets serialize in a canonical, language-independent order — byte-determinism guarantees (see [docs/SERIALIZATION.md](docs/SERIALIZATION.md)). See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
 
 | Area | Status |
 |------|--------|
@@ -266,7 +268,7 @@ npm run build
 npm test
 ```
 
-Requires Node.js >= 22. The test suite covers all nine packages (831 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the dashboard has its own suite — `cd dashboard && npm test` (167 tests). The `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets — Go, Rust, Java and C# are also compile-verified in CI, while the TypeScript, Python, FFI and events-rpc scripts are local-only gates.
+Requires Node.js >= 22. The test suite covers all nine packages (912 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the dashboard has its own suite — `cd dashboard && npm test` (167 tests). The `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets — Go, Rust, Java and C# are compile-verified in CI, TypeScript and Python run in the build-test job, the FFI script has a dedicated CI job, and only `verify-events-rpc.sh` remains a local-only gate.
 
 ## Contributing
 
