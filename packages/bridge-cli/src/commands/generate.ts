@@ -1,13 +1,13 @@
 /**
  * `bridge generate --language <lang> [--out dir] [--package-name name]
- *        [--force] [file]` — code generation.
+ *        [--force] [--cache] [file]` — code generation.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { generate, TargetLanguage } from '@bridge/generators';
 import { ParsedArgs } from '../args';
 import { loadConfig } from '../config';
-import { compileOrThrow } from '../compile';
+import { cacheRequested, compileOrThrow } from '../compile';
 import { inputFiles } from '../files';
 import { CliError, UsageError } from '../errors';
 import { out, CHECK } from '../output';
@@ -25,15 +25,18 @@ export function run(args: ParsedArgs): void {
   const lang = language as TargetLanguage;
 
   const force = args.flags.has('--force');
+  const useCache = cacheRequested(args.flags.has('--cache'));
   const packageName = args.values.get('--package-name');
   const files = inputFiles(args, 'generate');
 
   const outDir = args.values.get('--out') ?? path.join(defaultOutRoot(), lang);
 
   // Compile everything first, then generate, so errors surface before writes.
+  // With --cache/BRIDGE_CACHE the compile consults the deterministic
+  // .bridge-cache/ store: identical sources + compiler version skip recompilation.
   const generated = new Map<string, string>();
   for (const file of files) {
-    const { ir } = compileOrThrow(file);
+    const { ir } = compileOrThrow(file, { cache: useCache });
     for (const g of generate(ir, { language: lang, packageName })) {
       generated.set(path.join(outDir, g.path), g.content);
     }

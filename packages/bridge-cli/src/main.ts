@@ -39,7 +39,7 @@ const COMMANDS: Record<string, CommandEntry> = {
   fmt: { spec: { shortFlags: ['-w'] }, run: fmt.run },
   lint: { spec: { flags: ['--strict'] }, run: lint.run },
   generate: {
-    spec: { flags: ['--force'], options: ['--language', '--out', '--package-name'] },
+    spec: { flags: ['--force', '--cache'], options: ['--language', '--out', '--package-name'] },
     run: generate.run,
   },
   diff: { spec: { flags: ['--compatible'] }, run: diff.run },

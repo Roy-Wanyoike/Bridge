@@ -3,6 +3,7 @@
  *
  * Public API:
  * - `compileSource` / `compilePackage`   — compiler pipeline → canonical IR
+ * - `createCompileCache`                 — deterministic compile cache (CLI --cache)
  * - `formatSource`                       — canonical source formatter
  * - `formatDiagnostic` / `formatDiagnostics` — diagnostic rendering
  * - `analyzeFile` / SEMANTIC_CODES       — semantic analysis (tooling)
@@ -36,6 +37,10 @@ export {
   compilePackage,
   compileSource,
 } from './compiler/compile';
+
+// Deterministic, content-addressed compile cache (src/cache.ts, issue #23).
+// Shipped as a library first; the CLI `--cache` flag is its production consumer.
+export { createCompileCache } from './cache';
 
 // Formatter and diagnostic rendering.
 export { formatSource, type FormatResult } from './format';
