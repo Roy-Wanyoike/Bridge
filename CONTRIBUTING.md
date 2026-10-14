@@ -6,6 +6,10 @@ Thank you for your interest in contributing to Bridge! This document explains ho
 
 By participating in this project you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
+## Project governance
+
+Day-to-day decisions follow [GOVERNANCE.md](GOVERNANCE.md): area maintainers reach consensus and the Project Lead breaks ties; changes to the public IDL grammar, the target-language set, the security model, or governance itself need an issue discussion before implementation. The current maintainers and their areas of ownership are listed in [MAINTAINERS.md](MAINTAINERS.md).
+
 ## Getting started
 
 1. Fork the repository and create your branch from `main`.
