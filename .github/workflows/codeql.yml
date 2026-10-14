@@ -1,0 +1,33 @@
+# CodeQL security scanning for the JavaScript/TypeScript surface (monorepo
+# packages + dashboard). Runs on every push/PR to main and on a weekly
+# schedule. NOTE (issue #127): GitHub Actions is currently billing-locked —
+# this workflow has never executed remotely and activates once Actions runs
+# are re-enabled.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"

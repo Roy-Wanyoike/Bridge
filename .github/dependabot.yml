@@ -1,0 +1,46 @@
+# Dependabot: weekly dependency + GitHub Actions updates across the three
+# manifest roots — the monorepo root npm workspace, the dashboard's separate
+# npm app (own package.json + package-lock.json), and the action pins in
+# .github/workflows. NOTE (issue #127): GitHub Actions is currently
+# billing-locked, so Dependabot PRs will queue up but their CI checks stay
+# pending until Actions runs are re-enabled.
+version: 2
+updates:
+  # Root monorepo: workspace devDependencies + toolchain.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Dashboard is its own npm app with its own lockfile.
+  - package-ecosystem: npm
+    directory: "/dashboard"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Keep the actions/*, dtolnay/* and Swatinem/* pins fresh.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
