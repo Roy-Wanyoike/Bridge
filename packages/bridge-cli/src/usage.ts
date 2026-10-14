@@ -91,7 +91,7 @@ Exit codes: 0 clean (warnings tolerated by default); 1 when any error
 (or, with --strict, any finding) is reported.`,
 
   generate: `bridge generate --language <go|rust|typescript|python|java|csharp>
-                  [--out dir] [--package-name name] [--force] [file]
+                  [--out dir] [--package-name name] [--force] [--cache] [file]
 
 Compile a contract and generate a full language project from it.
 
@@ -105,6 +105,15 @@ Options:
   --out <dir>           output directory (default generated/<language>)
   --package-name <name> override the derived module/package name
   --force               overwrite existing files
+  --cache               reuse the deterministic compile cache kept in
+                        .bridge-cache/ in the current project directory.
+                        Entries are keyed by the source hash + compiler
+                        version, so a hit returns the stored compile result
+                        verbatim — byte-identical to a fresh compile — and
+                        a changed source or a new compiler version
+                        recompiles. BRIDGE_CACHE=1 enables the cache
+                        without the flag; an unwritable cache location
+                        degrades to plain (uncached) compilation.
 
 Prints every written path. Exit 1 on compile errors or when an existing
 file would be overwritten without --force.`,
