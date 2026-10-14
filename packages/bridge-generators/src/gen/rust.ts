@@ -8,13 +8,19 @@
  * list deterministic.
  *
  * Rust-specific decisions (documented in generated files too):
- * - Dependencies are serde (+derive) and serde_json ONLY — the generated
- *   crate has no other third-party dependencies. Consequences:
- *   - `@pattern` constraints are NOT evaluated by the generated Rust v1
- *     validator (no regex crate). validate() documents each skipped field
- *     with "pattern validation not supported in generated Rust v1".
- *   - @email/@url/@uuid are checked by hand-written helpers implementing
- *     the exact Bridge regex semantics without a regex crate.
+ * - Dependencies are serde (+derive) and serde_json ALWAYS, plus the
+ *   `regex` crate when the package declares `@pattern` constraints
+ *   (otherwise the generated crate has no third-party dependencies beyond
+ *   serde). Consequences:
+ *   - `@pattern` constraints ARE enforced: each constrained field gets an
+ *     init-once `static RE_<FIELD>: LazyLock<Regex>` (stdlib LazyLock, no
+ *     once_cell dependency) and an `is_match` check in validate(). The
+ *     regex crate has RE2-family semantics, matching the IDL's RE2-only
+ *     `@pattern` rule. A pattern the regex crate cannot compile fails
+ *     GENERATION with a BR2020 diagnostic (bridge-core Diagnostic shape,
+ *     rendered by formatDiagnostic) — never a silent skip. Valid IDL is
+ *     already RE2-only (BR2018 fires at compile time), so BR2020 is the
+ *     defense-in-depth pass for IR that bypassed the compiler.
  *   - `bytes` maps to Vec<u8>; serde_json serializes it as a JSON array of
  *     numbers (NOT base64 — base64 would require another dependency).
  *     This is a documented v1 wire-format caveat for Rust.
@@ -42,6 +48,7 @@
  */
 
 import type {
+  Diagnostic,
   IRField,
   IRService,
   IRTypeDefinition,
@@ -49,6 +56,7 @@ import type {
   IRConstraint,
   TypeRef,
 } from '@bridge/core';
+import { formatDiagnostic, re2UnsupportedConstruct, type Re2Finding } from '@bridge/core';
 import { generatedFile } from '../util';
 import { fileHeader, headerLines } from '../header';
 import { docLines, rustDoc } from '../docs';
@@ -60,12 +68,15 @@ import {
   rustServiceHttp,
 } from './rust-wire';
 import { findLocalType, isLocalEnumRef, isLocalStructRef, renderTypeRef } from '../mappings';
-import { crossPackageRefs, sortedEvents, sortedServices, sortedTypes } from '../analysis';
+import { crossPackageRefs, sortedEvents, sortedServices, sortedTypes, usesConstraint } from '../analysis';
 import { camelToLowerSnake, rustCrateName, rustFieldName, rustVariantName, serdeRenameAllMatches } from '../naming';
 import type { GeneratedFile, GeneratorInput } from './input';
 
 /** Generates the Rust project for an IR package. */
 export function generateRust(input: GeneratorInput): GeneratedFile[] {
+  // G1: fail generation in full — before any file is rendered — when a
+  // @pattern cannot compile with the `regex` crate. Never a silent skip.
+  assertRustPatternsCompilable(input);
   const files: GeneratedFile[] = [cargoTomlFile(input)];
   const types = rustTypesFile(input);
   const enums = rustEnumsFile(input);
@@ -230,6 +241,9 @@ function cargoTomlFile(input: GeneratorInput): GeneratedFile {
     '[dependencies]',
     'serde = { version = "1", features = ["derive"] }',
     'serde_json = "1"',
+    // Added only when the package declares @pattern constraints (G1): the
+    // generated validator precompiles each pattern with the regex crate.
+    ...(usesConstraint(input.ir, 'pattern') ? ['regex = "1"'] : []),
     '',
   ].join('\n');
   return generatedFile('Cargo.toml', content);
@@ -454,13 +468,165 @@ function rustEnum(enumType: IRTypeDefinition & { kind: 'enum' }): string {
 /* src/validate.rs                                                     */
 /* ------------------------------------------------------------------ */
 
+/** Stable diagnostic code: a @pattern the Rust `regex` crate cannot compile. */
+export const RUST_PATTERN_REGEX_CODE = 'BR2020';
+
+/**
+ * Thrown (generation fails in full, no files are emitted) when a @pattern
+ * cannot compile with the Rust `regex` crate. Carries the bridge-core
+ * Diagnostic (BR2020) it was rendered from, so programmatic consumers can
+ * surface the structured form while the message is the rendered
+ * `file:line:column: severity CODE: message` block.
+ */
+export class RustPatternRegexError extends Error {
+  readonly diagnostic: Diagnostic;
+  constructor(diagnostic: Diagnostic) {
+    super(formatDiagnostic(diagnostic));
+    this.name = 'RustPatternRegexError';
+    this.diagnostic = diagnostic;
+  }
+}
+
+/**
+ * Scan a pattern for constructs the Rust `regex` crate rejects that the
+ * compiler's RE2 gate (BR2018, re2UnsupportedConstruct) does not already
+ * cover: `\Q...\E` quoting and `\Z`. Both are "unknown escape sequence"
+ * errors in the regex crate (inside or outside character classes) while
+ * RE2/Go accepts `\Q..\E`; the check consumes escape pairs so `\\Q` (a
+ * literal backslash before Q) is not misread. Returns the first finding,
+ * or undefined when the pattern should compile.
+ */
+function rustRegexUnsupportedEscape(pattern: string): Re2Finding | undefined {
+  for (let i = 0; i < pattern.length - 1; i++) {
+    if (pattern.charAt(i) !== '\\') continue;
+    const next = pattern.charAt(i + 1);
+    if (next === 'Q') {
+      return { construct: 'escape `\\Q` (the regex crate has no \\Q...\\E quoting)', offset: i };
+    }
+    if (next === 'Z') {
+      return { construct: 'escape `\\Z` (the regex crate only has `\\z`)', offset: i };
+    }
+    i++; // consume the escape pair — `\\Q`/`\\Z` are literal backslashes
+  }
+  return undefined;
+}
+
+/** First construct the Rust `regex` crate would reject, if any. */
+function rustRegexUnsupportedConstruct(pattern: string): Re2Finding | undefined {
+  return re2UnsupportedConstruct(pattern) ?? rustRegexUnsupportedEscape(pattern);
+}
+
+/**
+ * G1: never silently skip a @pattern the Rust `regex` crate cannot compile.
+ * Runs BEFORE any Rust file is rendered, so an uncompilable pattern fails
+ * generation in full with a bridge-core Diagnostic (BR2020, error severity).
+ *
+ * Valid IDL never reaches this: the compiler already rejects RE2-incompatible
+ * patterns at compile time with BR2018 (with true file/line positions). This
+ * is the defense-in-depth pass for IR constructed programmatically, which
+ * bypasses parser and semantic checks. The IR carries no source positions,
+ * so the diagnostic anchors on the package identity at 1:1 and names the
+ * offending declaration (Type.field) plus the pattern offset in the message.
+ */
+function assertRustPatternsCompilable(input: GeneratorInput): void {
+  for (const type of sortedTypes(input.ir)) {
+    if (type.kind !== 'struct') continue;
+    for (const field of type.fields) {
+      for (const constraint of field.constraints) {
+        if (constraint.kind !== 'pattern') continue;
+        const pattern = constraint.args[0] ?? '';
+        const finding = rustRegexUnsupportedConstruct(pattern);
+        if (finding === undefined) continue;
+        const diagnostic: Diagnostic = {
+          severity: 'error',
+          code: RUST_PATTERN_REGEX_CODE,
+          message:
+            `@pattern ${JSON.stringify(pattern)} on ${type.name}.${field.name} uses ` +
+            `${finding.construct} at pattern offset ${finding.offset}, which the Rust regex crate ` +
+            'cannot compile — the generated crate would fail at Regex::new. Generation failed ' +
+            'instead of emitting a validator that silently skips this constraint. ' +
+            '(Generation-time diagnostic: the IR carries no source file/line, so it anchors on the package.)',
+          file: input.ir.name,
+          line: 1,
+          column: 1,
+          hint:
+            'The regex crate is RE2-family: no lookahead/lookbehind, no backreferences, no atomic or ' +
+            'possessive quantifiers, no \\Q...\\E quoting. Rewrite the pattern in plain RE2 syntax; ' +
+            'the same rule is enforced at compile time for IDL input as BR2018.',
+        };
+        throw new RustPatternRegexError(diagnostic);
+      }
+    }
+  }
+}
+
+/** Static identifier for the precompiled regex of one @pattern field. */
+function rustPatternStaticName(wireName: string): string {
+  return `RE_${wireName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+}
+
+/**
+ * Rust raw string literal (no escape processing). Regexes are backslash
+ * heavy, and Rust string escapes diverge from JSON's (`\u0041` needs braces,
+ * `\b`/`\f` do not exist), so plain JSON.stringify would emit non-compiling
+ * literals. Raw strings embed the pattern verbatim; when the text contains
+ * `"`, the `#` count is chosen so the closing sequence cannot occur in it.
+ */
+function rustRawStringLiteral(text: string): string {
+  let maxRun = 0;
+  for (let i = text.indexOf('"'); i !== -1; i = text.indexOf('"', i + 1)) {
+    let run = 0;
+    while (text.charAt(i + 1 + run) === '#') run++;
+    if (run > maxRun) maxRun = run;
+  }
+  if (maxRun === 0) return `r"${text}"`;
+  const hashes = '#'.repeat(maxRun + 1);
+  return `r${hashes}"${text}"${hashes}`;
+}
+
+/** String-like primitives that carry pattern/length/email/url/uuid checks. */
+function rustFieldIsStringLike(field: IRField): boolean {
+  let ref: TypeRef = field.type;
+  if (ref.kind === 'optional') ref = ref.inner;
+  return (
+    ref.kind === 'primitive' &&
+    ['string', 'uuid', 'timestamp', 'decimal'].includes(ref.primitive)
+  );
+}
+
+/**
+ * Precompiled per-field regexes for one struct (G1): one init-once static
+ * per @pattern field, declared inside validate() so the name is scoped per
+ * struct and compiled exactly once (LazyLock) instead of on every call.
+ * The emission mirrors Go's package-level `regexp.MustCompile` vars.
+ */
+function rustPatternStatics(struct: IRTypeDefinition & { kind: 'struct' }): string {
+  let out = '';
+  for (const field of struct.fields) {
+    if (!rustFieldIsStringLike(field)) continue;
+    for (const constraint of field.constraints) {
+      if (constraint.kind !== 'pattern') continue;
+      const arg = constraint.args[0] ?? '';
+      const name = rustPatternStaticName(field.name);
+      out += `// ${name} matches the @pattern constraint on ${struct.name}.${field.name}; compiled once (regex crate, RE2-family semantics).\n`;
+      out += `static ${name}: LazyLock<Regex> = LazyLock::new(|| {
+`;
+      out += `    Regex::new(${rustRawStringLiteral(arg)}).expect(${JSON.stringify(`valid @pattern regex for ${struct.name}.${field.name}`)})
+`;
+      out += `});
+
+`;
+    }
+  }
+  return out;
+}
+
 /** Constraint check rendered for Rust; undefined when unsupported/skipped. */
 function rustConstraintCheck(
   constraint: IRConstraint,
   field: IRField,
   input: GeneratorInput,
   accesses: { email: boolean; url: boolean; uuid: boolean },
-  notes: string[],
 ): string | undefined {
   const fallback = (text: string): string => constraint.message ?? text;
   const unwrap = (ref: TypeRef): TypeRef => (ref.kind === 'optional' ? ref.inner : ref);
@@ -469,9 +635,7 @@ function rustConstraintCheck(
   const isNumeric =
     inner.kind === 'primitive' &&
     ['int32', 'int64', 'uint32', 'uint64', 'float32', 'float64'].includes(inner.primitive);
-  const isStringLike =
-    inner.kind === 'primitive' &&
-    ['string', 'uuid', 'timestamp', 'decimal'].includes(inner.primitive);
+  const isStringLike = rustFieldIsStringLike(field);
 
   // Struct member accesses must go through rustFieldName: keyword-named
   // fields are declared as raw identifiers (r#type) or escaped names
@@ -543,8 +707,17 @@ function rustConstraintCheck(
     }
     case 'pattern': {
       if (!isStringLike) return undefined;
-      notes.push(`- \`${field.name}\`: pattern validation not supported in generated Rust v1`);
-      return undefined;
+      // G1: regex-backed validation (the `regex` crate is added to
+      // Cargo.toml when the package declares @pattern). The static itself
+      // is emitted by rustPatternStatics at the top of validate().
+      const arg = constraint.args[0] ?? '';
+      const staticName = rustPatternStaticName(field.name);
+      const text = fallback(`must match pattern ${arg}`);
+      const check = `if !${staticName}.is_match(${borrowedArgExpr}) {\n    ${err(text)}\n}\n`;
+      if (field.optional) {
+        return optionalGuardOpen + spaceIndent(check) + optionalGuardClose;
+      }
+      return check;
     }
     default:
       return undefined;
@@ -557,12 +730,14 @@ function rustValidateImpl(
   accesses: { email: boolean; url: boolean; uuid: boolean },
 ): string {
   let out = '';
-  const notes: string[] = [];
   let checks = '';
+  // G1: @pattern statics come first, so every is_match() below compiles its
+  // regex exactly once per process instead of on every validate() call.
+  const statics = rustPatternStatics(struct);
 
   for (const field of struct.fields) {
     for (const constraint of field.constraints) {
-      const rendered = rustConstraintCheck(constraint, field, input, accesses, notes);
+      const rendered = rustConstraintCheck(constraint, field, input, accesses);
       if (rendered !== undefined) checks += rendered;
     }
   }
@@ -588,12 +763,10 @@ function rustValidateImpl(
 
   out += `impl ${struct.name} {\n`;
   out += `    /// Validates the constraints declared on ${struct.name} in the Bridge contract.\n`;
-  if (notes.length > 0) {
-    out += `    ///\n`;
-    out += `    /// # Notes\n`;
-    for (const note of notes) out += `    /// ${note}\n`;
-  }
   out += `    pub fn validate(&self) -> Result<(), ValidationError> {\n`;
+  if (statics.trimEnd().length > 0) {
+    out += `${spaceIndent(statics.trimEnd(), 2)}\n`;
+  }
   if (checks.trimEnd().length > 0) {
     out += `${spaceIndent(checks.trimEnd(), 2)}\n`;
   }
@@ -688,6 +861,10 @@ fn is_bridge_uuid(value: &str) -> bool {
   }
 
   const uses: string[] = [];
+  const usesPattern = usesConstraint(input.ir, 'pattern');
+  // rustfmt grouping order: std, external crates, then crate-local paths.
+  if (usesPattern) uses.push('use std::sync::LazyLock;');
+  if (usesPattern) uses.push('use regex::Regex;');
   const structsUse = rustUseList(
     'crate::types',
     structs.map((s) => s.name),
@@ -697,6 +874,12 @@ fn is_bridge_uuid(value: &str) -> bool {
   const crateDocs = [
     'Constraint validation generated from the Bridge @constraint annotations.',
     'Note: `len()` counts bytes, not unicode characters (documented v1 caveat).',
+    ...(usesPattern
+      ? [
+          '@pattern checks are precompiled once into std::sync::LazyLock<Regex> statics',
+          '(the `regex` crate has RE2-family semantics, matching the Bridge @pattern rule).',
+        ]
+      : []),
   ];
 
   const parts = [

@@ -28,6 +28,8 @@ export {
   suggestionHint,
   SEMANTIC_CODES,
   INTERNAL_ERROR,
+  re2UnsupportedConstruct,
+  type Re2Finding,
   type AnalyzeOptions,
 } from './semantic';
 

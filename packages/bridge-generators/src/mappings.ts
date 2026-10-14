@@ -41,10 +41,12 @@
  *   per-generator headers).
  * - Optional fields map to `*T` / `Option<T>` / `field?: T` /
  *   `field: T | None = None` / `Optional<T>` (Java) / `T?` (C#).
- * - `@pattern` is compiled as a user regex in Go/TS/Python. In Rust it is
- *   NOT supported (no regex dependency): `validate()` reports
- *   "pattern validation not supported in generated Rust v1" for such
- *   fields. This is a documented v1 limitation.
+ * - `@pattern` is compiled as a user regex in every backend: Go/TS/Python
+ *   with the language's regex facility, Java/C# with per-field compiled
+ *   constants, Rust with the `regex` crate (RE2-family, added to the
+ *   generated Cargo.toml only when needed). A pattern the Rust regex crate
+ *   cannot compile fails Rust generation with a BR2020 diagnostic — never
+ *   a silent skip.
  */
 
 import type { IRPackage, IRTypeDefinition, PrimitiveKind, TypeRef } from '@bridge/core';
