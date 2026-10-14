@@ -44,22 +44,30 @@ const STALE_PATTERNS = [
   { label: 'old dashboard count "94-test"', regex: /94-test dashboard suite/ },
   { label: 'old dashboard count "(94 tests)"', regex: /\(94 tests\)/ },
   { label: 'old dashboard count "94-test suite"', regex: /94-test suite/ },
+  // Workspace suite size before the post-audit wave (#188/#191/#192/#193).
+  { label: 'old workspace count "831 tests"', regex: /831 tests/i },
+  { label: 'old workspace count "831 green tests"', regex: /831 green tests/i },
+  // verify-ts/verify-python moved into the CI build-test job; verify-ffi
+  // gained a dedicated job. Only verify-events-rpc.sh is local-only now.
+  { label: 'stale "not wired into any CI workflow" about TS/Python', regex: /verify-python\.sh`\) that are not wired/ },
+  { label: 'stale "TS/Python via local scripts"', regex: /TypeScript and Python (?:via|verified by) local scripts/ },
+  { label: 'stale "FFI ... local-only gates"', regex: /TypeScript, Python, FFI and events-rpc scripts are local-only/ },
 ];
 
-/** Canonical facts each doc must contain (verified suite: 831 + dashboard 167). */
+/** Canonical facts each doc must contain (verified suite: 912 + dashboard 167). */
 const REQUIRED = [
   {
     file: 'README.md',
     needles: [
-      '831 tests',
-      'CLI 136',
+      '912 tests',
+      'CLI 148',
       'compat 109',
       'core 172',
       'FFI 12',
-      'generators 86',
-      'LSP 38',
+      'generators 92',
+      'LSP 72',
       'registry 65',
-      'registry-service 101',
+      'registry-service 130',
       'serialization 112',
       '167-test dashboard suite',
       'doctor/version/help',
@@ -72,8 +80,8 @@ const REQUIRED = [
   {
     file: 'CONTRIBUTING.md',
     needles: [
-      '831 tests',
-      'CLI 136',
+      '912 tests',
+      'CLI 148',
       'serialization 112',
       '167-test suite',
       'dashboard/',
@@ -82,9 +90,9 @@ const REQUIRED = [
   {
     file: 'docs/TESTING.md',
     needles: [
-      '831 tests',
-      'CLI 136',
-      'registry-service 101',
+      '912 tests',
+      'CLI 148',
+      'registry-service 130',
       'serialization 112',
       '167 tests',
       'verify-events-rpc.sh',
@@ -93,8 +101,8 @@ const REQUIRED = [
   {
     file: 'docs/ROADMAP.md',
     needles: [
-      '831 tests',
-      'registry-service 101',
+      '912 tests',
+      'registry-service 130',
       '167-test dashboard suite',
       'not wired into any CI workflow',
       'Go/Rust/Java/C# compile-verified in CI',
@@ -103,11 +111,11 @@ const REQUIRED = [
   },
   {
     file: 'docs/strategy/MARKET_ANALYSIS.md',
-    needles: ['831 tests', '831 green tests'],
+    needles: ['912 tests', '912 green tests'],
   },
   {
     file: 'docs/strategy/POSITIONING.md',
-    needles: ['831 tests', '831 green tests', 'compile-verified in CI'],
+    needles: ['912 tests', '912 green tests', 'compile-verified in CI'],
   },
   {
     file: 'CHANGELOG.md',

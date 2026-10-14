@@ -6,7 +6,7 @@ How Bridge tests itself, and how to reproduce any failure deterministically.
 
 | Layer | What it proves | Where |
 | ----- | -------------- | ----- |
-| Unit + functional suites | Every package behaves to spec (831 tests across nine packages: CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112) | `packages/*/src/test/` |
+| Unit + functional suites | Every package behaves to spec (912 tests across nine packages: CLI 148, compat 109, core 172, FFI 12, generators 92, LSP 72, registry 65, registry-service 130, serialization 112) | `packages/*/src/test/` |
 | Dashboard suite | The registry console's clients, pages and routing behave to spec (167 tests — a separate app, run via `cd dashboard && npm test`) | `dashboard/tests/` |
 | Golden vectors | 4 languages agree byte-for-byte on the wire | `packages/bridge-serialization/vectors/` + `scripts/verify-serialization.sh` |
 | Property-based tests | Invariants hold over hundreds of seeded generated inputs | `packages/*/src/test/property/` |
