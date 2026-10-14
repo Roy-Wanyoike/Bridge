@@ -128,6 +128,71 @@ export interface AuthConfig {
   oidc?: OidcConfig;
 }
 
+// ------------------------------------------------------------ issued tokens
+
+/**
+ * OAuth2/OIDC scope string accepted for an issued token
+ * (`registry:read` | `registry:publish` | `registry:admin`).
+ */
+export type TokenScope = (typeof SCOPES)[keyof typeof SCOPES];
+
+/**
+ * A durable, service-issued API token record (audit item R1). The plaintext
+ * is generated once at creation and NEVER stored — only `tokenHash`
+ * (`sha256` over a per-record service-owned salt) persists.
+ */
+export interface IssuedTokenRecord {
+  /** Stable credential id (embedded in the plaintext for direct lookup). */
+  id: string;
+  /** Org the token is bound to — every request it makes is confined here. */
+  org: string;
+  /** Optional operator label (metadata only, e.g. 'ci-deploy'). */
+  name?: string;
+  /** `<salt-hex>$<sha256-hex>` — never the plaintext. */
+  tokenHash: string;
+  /** Access granted by the token (see {@link SCOPES}). */
+  scope: TokenScope;
+  /** Principal subject that created the token (audit identity). */
+  createdBy: string;
+  /** ISO-8601 UTC creation timestamp. */
+  createdAt: string;
+  /** ISO-8601 UTC expiry, or `null` for a non-expiring token. */
+  expiresAt: string | null;
+  /** ISO-8601 UTC revocation timestamp, or `null` while the token is live. */
+  revokedAt: string | null;
+}
+
+/** Metadata-only view of {@link IssuedTokenRecord} (no credential material). */
+export interface IssuedTokenMeta {
+  id: string;
+  org: string;
+  name?: string;
+  scope: TokenScope;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+}
+
+/**
+ * Persistence for issued tokens. Implemented by both storage drivers so the
+ * token lifecycle inherits the deployment's storage durability choice
+ * (in-process for the memory driver, `bridge_tokens` for PostgreSQL).
+ */
+export interface TokenStore {
+  /** Persist a newly created record (id must not collide). */
+  createIssuedToken(record: IssuedTokenRecord): Promise<void>;
+  /** Fetch one record by id; `null` when unknown. */
+  findIssuedTokenById(id: string): Promise<IssuedTokenRecord | null>;
+  /** All records for one org, newest first (metadata + hash; project at the API layer). */
+  listIssuedTokens(org: string): Promise<IssuedTokenRecord[]>;
+  /**
+   * Stamp `revokedAt` on the org's token `id`. Returns `false` when the
+   * record does not exist in that org; revoking a revoked token is idempotent.
+   */
+  revokeIssuedToken(org: string, id: string, revokedAt: string): Promise<boolean>;
+}
+
 // ------------------------------------------------------------------ signing
 
 /**
@@ -304,7 +369,7 @@ export interface StoredContract {
  * before they reach a driver; drivers additionally re-validate defensively.
  * Hash integrity (`hashPackage`) is re-verified on every `pull`.
  */
-export interface StorageDriver {
+export interface StorageDriver extends TokenStore {
   readonly kind: 'memory' | 'postgres';
   /** Prepare the backing store (no-op for memory, migrations for Postgres). */
   init(): Promise<void>;

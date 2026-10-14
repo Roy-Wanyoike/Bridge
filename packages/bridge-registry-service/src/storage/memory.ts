@@ -12,6 +12,8 @@
  * - every pull re-hashes the stored IR and throws `'corrupt'` on mismatch.
  *
  * Audit entries live in a bounded ring shared with the driver's lifetime.
+ * Issued-token records (audit item R1) live in a plain map — plaintexts are
+ * never stored, only the salted SHA-256 `tokenHash` computed by the service.
  * All state is process-local; nothing survives a restart (that is what the
  * PostgreSQL driver is for).
  */
@@ -24,6 +26,7 @@ import type {
   AuditEntry,
   AuditFilter,
   ContractMeta,
+  IssuedTokenRecord,
   PublishInput,
   PublishResult,
   StorageDriver,
@@ -62,6 +65,8 @@ export class InMemoryDriver implements StorageDriver {
   private readonly orgs = new Map<string, Map<string, ProjectState>>();
   private readonly audit: AuditEntry[] = [];
   private readonly auditCapacity: number;
+  /** Issued-token records by credential id (audit item R1). */
+  private readonly tokens = new Map<string, IssuedTokenRecord>();
 
   public constructor(auditCapacity: number = MEMORY_SINK_CAPACITY) {
     this.auditCapacity = auditCapacity;
@@ -74,6 +79,7 @@ export class InMemoryDriver implements StorageDriver {
   public async close(): Promise<void> {
     this.orgs.clear();
     this.audit.length = 0;
+    this.tokens.clear();
   }
 
   // ------------------------------------------------------------------ publish
@@ -309,6 +315,44 @@ export class InMemoryDriver implements StorageDriver {
 
   public async queryAudit(filter: AuditFilter): Promise<AuditEntry[]> {
     return applyAuditFilter(this.audit, filter);
+  }
+
+  // ------------------------------------------------------------ issued tokens
+
+  public async createIssuedToken(record: IssuedTokenRecord): Promise<void> {
+    if (typeof record?.id !== 'string' || record.id.length === 0) {
+      throw new TypeError('createIssuedToken(): record.id is required');
+    }
+    if (this.tokens.has(record.id)) {
+      throw new RegistryError('immutable', `Issued token '${record.id}' already exists`);
+    }
+    // Defensive copy: the store owns its state (callers must not be able to
+    // mutate a stored record — e.g. clearing `revokedAt` — after the fact).
+    this.tokens.set(record.id, { ...record });
+  }
+
+  public async findIssuedTokenById(id: string): Promise<IssuedTokenRecord | null> {
+    const record = this.tokens.get(id);
+    return record === undefined ? null : { ...record };
+  }
+
+  public async listIssuedTokens(org: string): Promise<IssuedTokenRecord[]> {
+    assertOrgOrProject(org, 'org');
+    const out: IssuedTokenRecord[] = [];
+    for (const record of this.tokens.values()) {
+      if (record.org === org) out.push({ ...record });
+    }
+    // Newest first (createdAt is ISO-8601 UTC text — lexicographic works).
+    out.sort((a, b) => (a.createdAt >= b.createdAt ? -1 : 1));
+    return out;
+  }
+
+  public async revokeIssuedToken(org: string, id: string, revokedAt: string): Promise<boolean> {
+    assertOrgOrProject(org, 'org');
+    const record = this.tokens.get(id);
+    if (record === undefined || record.org !== org) return false;
+    if (record.revokedAt === null) record.revokedAt = revokedAt;
+    return true;
   }
 
   // ----------------------------------------------------------------- private

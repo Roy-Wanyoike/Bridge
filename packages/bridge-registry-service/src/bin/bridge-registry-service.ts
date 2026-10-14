@@ -16,10 +16,11 @@ import { readFileSync } from 'node:fs';
 import { start } from '../server';
 import { FileAuditSink } from '../audit';
 import { assertTokenEntropy } from '../auth';
+import { installJsonLogging, logFormatFromEnv } from '../logging';
 import { InMemoryDriver } from '../storage/memory';
 import { PostgresDriver, parseDsn } from '../storage/postgres/driver';
 import type { PgConnectOptions } from '../storage/postgres/driver';
-import type { RegistryRole, RegistryServiceOptions, RegistryTokenInfo, StorageDriver } from '../types';
+import type { AuditBackend, RegistryRole, RegistryServiceOptions, RegistryTokenInfo, StorageDriver } from '../types';
 
 const USAGE = `bridge-registry-service — multi-tenant Bridge contract registry
 
@@ -59,6 +60,11 @@ Options:
                                  refused).
   --audit <file.jsonl>           Mirror audit entries to an append-only JSONL
                                  file (entries always also go to the driver)
+                                 DEFAULT for the memory driver: ./data/audit.jsonl
+                                 (see BRIDGE_REGISTRY_AUDIT_FILE) — in-memory
+                                 audit state is a bounded ring that dies with
+                                 the process, so the mirror is on unless you
+                                 explicitly turn it off
   --audit-retention-days <days>  Postgres only: delete bridge_audit rows older
                                  than <days> (boot sweep, then every 6h).
                                  Default: 30 — retention is always on so the
@@ -84,7 +90,12 @@ Defaults (issue #48 hardening):
 Environment (equivalents):
   BRIDGE_REGISTRY_PORT, BRIDGE_REGISTRY_DRIVER, PG_DSN,
   BRIDGE_REGISTRY_TOKEN (repeatable via ';': secret=org:role;secret2=org:role),
-  BRIDGE_REGISTRY_PRODUCTION=1 (same as --production-profile)
+  BRIDGE_REGISTRY_PRODUCTION=1 (same as --production-profile),
+  BRIDGE_REGISTRY_AUDIT_FILE=<path> — audit mirror path for the memory
+    driver (default ./data/audit.jsonl); 'off'/'none'/'false'/'0' disables
+    the mirror explicitly,
+  BRIDGE_LOG_FORMAT=json — structured JSON-lines logging (one object per
+    line with time/level/msg); default is human-readable console output
 
 Examples:
   bridge-registry-service --token dev-acme=acme:write --token ro=acme:read
@@ -93,6 +104,7 @@ Examples:
     --pg-dsn postgres://bridge@db/bridge?sslmode=verify-full
 
 Health:   curl http://127.0.0.1:4350/healthz
+Metrics:  curl http://127.0.0.1:4350/metrics   (Prometheus text format)
 API doc:  curl http://127.0.0.1:4350/v1/openapi.json
 Publish:  curl -X PUT -H 'Authorization: Bearer dev-acme' \\
             --data-binary @payments.ir.json \\
@@ -147,6 +159,12 @@ export interface Config {
   productionProfile: boolean;
   auditFile?: string;
   /**
+   * True when BRIDGE_REGISTRY_AUDIT_FILE explicitly disabled the audit
+   * mirror ('off'/'none'/'false'/'0') so the memory-driver default below
+   * does not re-enable it (audit item R2).
+   */
+  auditFileDisabled?: boolean;
+  /**
    * Audit retention window in days (postgres only). `undefined` applies the
    * postgres driver default (30 — issue #120 item 8); retention is always on.
    */
@@ -167,6 +185,22 @@ function envTokens(): Record<string, RegistryTokenInfo> {
     out[secret] = { tenant: rest.slice(0, colon), role: rest.slice(colon + 1) as RegistryRole };
   }
   return out;
+}
+
+/**
+ * Default audit mirror path for the memory driver (audit item R2): the
+ * driver's audit history is a bounded in-process ring — it dies with the
+ * process, so a naive deployment lost its audit trail on every restart.
+ * The bin now mirrors to this JSONL file unless explicitly disabled.
+ */
+export const DEFAULT_AUDIT_FILE = './data/audit.jsonl';
+
+/** Values of BRIDGE_REGISTRY_AUDIT_FILE that explicitly disable the mirror. */
+const AUDIT_FILE_OFF_VALUES = new Set(['off', 'none', 'false', '0']);
+
+/** True when `value` explicitly disables the audit mirror. */
+export function isAuditFileOffValue(value: string): boolean {
+  return AUDIT_FILE_OFF_VALUES.has(value.trim().toLowerCase());
 }
 
 /** Parse argv/env into a {@link Config} (exported for tests). */
@@ -192,6 +226,18 @@ export function parseArgs(argv: string[]): Config {
       throw new UsageError(`BRIDGE_REGISTRY_AUDIT_RETENTION_DAYS must be an integer >= 1, got '${envRetention}'`);
     }
     config.auditRetentionDays = days;
+  }
+  // Audit mirror via env (audit item R2): a path turns the mirror on at
+  // that location; the off-values turn it OFF explicitly (so the memory
+  // driver default below does not re-enable it).
+  const envAuditFile = process.env['BRIDGE_REGISTRY_AUDIT_FILE'];
+  if (envAuditFile !== undefined && envAuditFile.length > 0) {
+    if (isAuditFileOffValue(envAuditFile)) {
+      config.auditFile = undefined;
+      config.auditFileDisabled = true;
+    } else {
+      config.auditFile = envAuditFile;
+    }
   }
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) config.port = 4350;
 
@@ -297,6 +343,26 @@ export function parseArgs(argv: string[]): Config {
   if (config.driver === 'postgres' && config.pgDsn === undefined) {
     throw new UsageError('--driver postgres requires --pg-dsn (or PG_DSN)');
   }
+  // Audit-durability default (audit item R2): the memory driver's audit
+  // backend is a bounded in-process ring that dies with the process, so the
+  // bin mirrors audit entries to a JSONL file UNLESS the operator turned
+  // the mirror off (BRIDGE_REGISTRY_AUDIT_FILE=off) or picked another path
+  // (--audit / env). Postgres audit rows are durable and retention-managed
+  // already, so the postgres driver keeps its no-mirror default.
+  if (
+    config.auditFile === undefined &&
+    config.auditFileDisabled !== true &&
+    config.driver === 'memory'
+  ) {
+    config.auditFile = DEFAULT_AUDIT_FILE;
+  }
+  if (config.driver === 'postgres') {
+    // The JSONL mirror is a memory-driver durability aid (audit item R2):
+    // postgres audit rows are durable and retention-managed already, so the
+    // mirror is not wired for postgres — --audit / env values are ignored.
+    config.auditFile = undefined;
+    config.auditFileDisabled = undefined;
+  }
   return config;
 }
 
@@ -374,6 +440,25 @@ function buildDriver(config: Config): StorageDriver {
   return new InMemoryDriver();
 }
 
+/**
+ * Mirror audit appends to an append-only JSONL file alongside the driver
+ * backend (audit item R2): every entry goes to the driver (so `/v1/audit`
+ * semantics are unchanged) AND to the file (so entries survive restarts —
+ * the memory driver's ring does not). Exported for tests.
+ */
+export function wireFileAuditMirror(options: RegistryServiceOptions, filePath: string): void {
+  const driverBackend = options.driver;
+  const fileSink = new FileAuditSink(filePath);
+  options.audit = {
+    append: async (entry) => {
+      await driverBackend.appendAudit(entry);
+      fileSink.append(entry);
+    },
+    query: async (filter) =>
+      (driverBackend as { queryAudit(f: unknown): Promise<unknown[]> }).queryAudit(filter) as never,
+  } satisfies AuditBackend;
+}
+
 function run(argv: string[]): number {
   let config: Config;
   try {
@@ -388,16 +473,18 @@ function run(argv: string[]): number {
   }
 
   try {
+    // Structured logging (audit item R3): BRIDGE_LOG_FORMAT=json switches
+    // every console.* log line to JSON lines BEFORE the service boots, so
+    // even the startup notices are machine-ingestible. Usage/argv errors
+    // above intentionally stay human-readable.
+    if (logFormatFromEnv() === 'json') installJsonLogging();
     const options = buildOptions(config);
     if (config.auditFile !== undefined) {
-      const driverBackend = options.driver;
-      options.audit = {
-        append: async (entry) => {
-          await (driverBackend as { appendAudit(e: unknown): Promise<void> }).appendAudit(entry);
-          await new FileAuditSink(config.auditFile!).append(entry);
-        },
-        query: async (filter) => (driverBackend as { queryAudit(f: unknown): Promise<unknown[]> }).queryAudit(filter) as never,
-      };
+      wireFileAuditMirror(options, config.auditFile);
+      console.log(
+        `[bridge-registry-service] audit entries mirror to ${config.auditFile} ` +
+          '(JSONL; the in-memory driver alone keeps only a bounded ring). Disable with BRIDGE_REGISTRY_AUDIT_FILE=off.',
+      );
     }
     // Issue #120 item 6: a non-loopback bind is always an explicit --host
     // decision — say so loudly BEFORE the socket opens.
