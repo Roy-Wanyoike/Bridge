@@ -145,7 +145,7 @@ see [docs/FFI.md](docs/FFI.md).
 
 ## Status
 
-**Bridge 0.2.1 — the roadmap through Phase 3 is shipped and tested: 831 tests green across nine packages (CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112), plus a separate 94-test dashboard suite (`cd dashboard && npm test`), generated Go/Rust/Java/C# compile-verified in CI, the Go↔Rust FFI proven end to end on real builds, and the CLI publishes to the registry service over HTTP — with optional ed25519 signing for required-mode services and recorded generated-language metadata that lights up the dashboard's live badges.** Generators now diagnose per-language identifier collisions instead of emitting non-compiling code, and sets serialize in a canonical, language-independent order — byte-determinism guarantees (see [docs/SERIALIZATION.md](docs/SERIALIZATION.md)). See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
+**Bridge 0.2.1 — the roadmap through Phase 3 is shipped and tested: 831 tests green across nine packages (CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112), plus a separate 167-test dashboard suite (`cd dashboard && npm test`), generated Go/Rust/Java/C# compile-verified in CI, the Go↔Rust FFI proven end to end on real builds, and the CLI publishes to the registry service over HTTP — with optional ed25519 signing for required-mode services and recorded generated-language metadata that lights up the dashboard's live badges.** Generators now diagnose per-language identifier collisions instead of emitting non-compiling code, and sets serialize in a canonical, language-independent order — byte-determinism guarantees (see [docs/SERIALIZATION.md](docs/SERIALIZATION.md)). See the [roadmap](docs/ROADMAP.md) and [open issues](https://github.com/Roy-Wanyoike/bridge/issues) for what's next.
 
 | Area | Status |
 |------|--------|
@@ -266,13 +266,13 @@ npm run build
 npm test
 ```
 
-Requires Node.js >= 22. The test suite covers all nine packages (831 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the dashboard has its own suite — `cd dashboard && npm test` (94 tests). The `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets — Go, Rust, Java and C# are also compile-verified in CI, while the TypeScript, Python, FFI and events-rpc scripts are local-only gates.
+Requires Node.js >= 22. The test suite covers all nine packages (831 tests: compiler, generators, compat + impact, serialization, local registry, registry service, FFI, LSP, CLI); the dashboard has its own suite — `cd dashboard && npm test` (167 tests). The `scripts/verify-*.sh` files additionally type-check and round-trip the generated code for every example, including the Java and C# targets — Go, Rust, Java and C# are also compile-verified in CI, while the TypeScript, Python, FFI and events-rpc scripts are local-only gates.
 
 ## Contributing
 
 Bridge is an open-source project and contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). Good first issues are labeled [`good first issue`](https://github.com/Roy-Wanyoike/bridge/labels/good%20first%20issue), and the [roadmap issues](https://github.com/Roy-Wanyoike/bridge/issues) are the fastest way to see where help is needed.
 
-If you're scoping the codebase: the compiler core (`packages/bridge-core`: lexer, parser, semantic analysis, canonical IR) is the heart of the project; `packages/bridge-generators` carries six language backends with byte-level snapshot tests; `packages/bridge-registry-service` is a hardened multi-tenant HTTP service (auth, rate limiting, signing, audit); and `dashboard/` is a Next.js console with its own 94-test suite. Whatever you pick up, the rule in CONTRIBUTING holds: a feature is done when it's implemented, tested, documented, and verified, never before.
+If you're scoping the codebase: the compiler core (`packages/bridge-core`: lexer, parser, semantic analysis, canonical IR) is the heart of the project; `packages/bridge-generators` carries six language backends with byte-level snapshot tests; `packages/bridge-registry-service` is a hardened multi-tenant HTTP service (auth, rate limiting, signing, audit); and `dashboard/` is a Next.js console with its own 167-test suite. Whatever you pick up, the rule in CONTRIBUTING holds: a feature is done when it's implemented, tested, documented, and verified, never before.
 
 ## License
 

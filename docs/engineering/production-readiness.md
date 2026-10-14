@@ -5,7 +5,7 @@ Gate table for a public 1.0. Verdicts are honest, not generous:
 plausible today; **PARTIAL** = real and useful but with named holes;
 **MISSING** = not present. Evidence lines cite files and, where measured,
 test counts (see [testing-audit](./testing-audit.md) for the full run:
-831 workspace tests + 100 dashboard tests, 0 failures).
+831 workspace tests + 167 dashboard tests, 0 failures).
 
 ## 1. Gate table
 
@@ -31,12 +31,12 @@ test counts (see [testing-audit](./testing-audit.md) for the full run:
 | Registry service | **PASS** | Multi-tenant HTTP API: OIDC/static auth, signing (v1+v2 envelope), audit, dual-tier rate limits, memory+PostgreSQL drivers, OpenAPI 3.1 (101 tests incl. hardening suites) |
 | CLI | **PASS** | All 16 commands exist and are tested (136 tests); exit-code contract; local + HTTP registries; publish signing flags |
 | LSP | **PARTIAL** | Diagnostics/hover/completion/formatting over stdio (38 tests); no definition/references/rename, full-document sync only |
-| Dashboard | **PARTIAL** | 6 routes, demo+live modes, security headers, 100 vitest tests — but **no auth gate** (issue #163 not started in-tree) |
+| Dashboard | **PARTIAL** | 6 routes, demo+live modes, security headers, **OIDC login gate shipped (issue #163: middleware + PKCE + httpOnly sessions)**, 167 vitest tests |
 | Security | **PARTIAL** | Service controls strong (org-bound fail-closed auth, signing, audit, rate limits, body caps); gaps: per-user ACL, consumer-side signature verification, dev-time dependency scanning, dashboard gate — see [security-audit](./security-audit.md) |
 | Observability | **MISSING** | `/healthz` only; no metrics endpoint, no structured logging, no tracing (`server.ts`, `bin/bridge-registry-service.ts`) |
 | Performance / benchmarks | **MISSING** | No benchmark suite anywhere in the repo; determinism is proven, speed is unmeasured |
 | CI/CD | **PARTIAL** | `ci.yml` (7 jobs) + `release.yml` (version guard → binaries → checksums/SBOM/cosign → release → multi-arch container → npm) are complete and well-designed — but **no run has ever executed** (Actions billing lock, #127; no tag cut) |
-| Documentation | **PASS** | 10 normative docs + strategy notes, all cross-linked and mechanically fact-checked in CI (`scripts/check-docs-facts.mjs`); two stale test-count figures found (dashboard 94→100) |
+| Documentation | **PASS** | 10 normative docs + strategy notes, all cross-linked and mechanically fact-checked in CI (`scripts/check-docs-facts.mjs`); two stale test-count figures found (dashboard 94→167) |
 | Community readiness | **PARTIAL** | LICENSE/CONTRIBUTING/CODE_OF_CONDUCT/SECURITY/CHANGELOG/ROADMAP + issue templates present; no governance/maintainer model, single-maintainer bus factor, first release uncut |
 
 ## 2. What stands between the repo and a public 1.0
@@ -67,7 +67,7 @@ In order of leverage:
    expiry (static `TokenTable` is dev-grade), and — post-1.0 — per-user ACL.
 7. **Minimum observability for the service**: a `/metrics` endpoint and
    structured logs; hosted operation without them is flying blind.
-8. **Housekeeping before the tag**: update the stale 94-test dashboard
+8. **Housekeeping before the tag**: update the stale dashboard count
    figure in `docs/TESTING.md`/`docs/ROADMAP.md`, confirm the `DATABASE_URL`
    rotation noted in the worklog, and wire the compile cache or remove it
    from the docs as a shipped feature.

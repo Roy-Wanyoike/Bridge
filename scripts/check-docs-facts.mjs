@@ -40,9 +40,13 @@ const STALE_PATTERNS = [
   { label: 'old count "669" (pre-platform-era suite size)', regex: /669/ },
   { label: 'old count "711 tests"', regex: /711 tests/i },
   { label: 'old count "711"', regex: /\b711\b/ },
+  // Dashboard suite sizes before the OIDC gate tests landed (issue #163).
+  { label: 'old dashboard count "94-test"', regex: /94-test dashboard suite/ },
+  { label: 'old dashboard count "(94 tests)"', regex: /\(94 tests\)/ },
+  { label: 'old dashboard count "94-test suite"', regex: /94-test suite/ },
 ];
 
-/** Canonical facts each doc must contain (verified suite: 831 + dashboard 94). */
+/** Canonical facts each doc must contain (verified suite: 831 + dashboard 167). */
 const REQUIRED = [
   {
     file: 'README.md',
@@ -57,7 +61,7 @@ const REQUIRED = [
       'registry 65',
       'registry-service 101',
       'serialization 112',
-      '94-test dashboard suite',
+      '167-test dashboard suite',
       'doctor/version/help',
       'Generated Go, Rust, Java and C# are compile-verified in CI',
       'scripts/verify-ts.sh',
@@ -71,7 +75,7 @@ const REQUIRED = [
       '831 tests',
       'CLI 136',
       'serialization 112',
-      '94-test suite',
+      '167-test suite',
       'dashboard/',
     ],
   },
@@ -82,7 +86,7 @@ const REQUIRED = [
       'CLI 136',
       'registry-service 101',
       'serialization 112',
-      '94 tests',
+      '167 tests',
       'verify-events-rpc.sh',
     ],
   },
@@ -91,7 +95,7 @@ const REQUIRED = [
     needles: [
       '831 tests',
       'registry-service 101',
-      '94-test dashboard suite',
+      '167-test dashboard suite',
       'not wired into any CI workflow',
       'Go/Rust/Java/C# compile-verified in CI',
       'issues/127',
@@ -135,6 +139,9 @@ for (const rel of DOC_FILES) {
   }
 
   for (const { label, regex } of STALE_PATTERNS) {
+    // CHANGELOG.md is a historical record — counts that were true at the
+    // time of a release must stay; only living docs are scanned for drift.
+    if (rel === 'CHANGELOG.md') continue;
     if (regex.test(text)) {
       failures.push(`${rel}: stale fact found — ${label}`);
     }

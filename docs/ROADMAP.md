@@ -6,7 +6,7 @@ Legend: 🔲 planned · 🟡 in progress · ✅ done
 
 ## Phase 1 — The compiler era (shipped)
 
-One IDL → one deterministic IR → validated code in four languages, with compatibility checking and an immutable registry. Shipped with 355+ tests across five packages; the full suite now stands at 831 tests across nine packages (CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112), plus a separate 94-test dashboard suite (`cd dashboard && npm test`).
+One IDL → one deterministic IR → validated code in four languages, with compatibility checking and an immutable registry. Shipped with 355+ tests across five packages; the full suite now stands at 831 tests across nine packages (CLI 136, compat 109, core 172, FFI 12, generators 86, LSP 38, registry 65, registry-service 101, serialization 112), plus a separate 167-test dashboard suite (`cd dashboard && npm test`).
 
 | Capability | Status | Notes |
 |------------|--------|-------|

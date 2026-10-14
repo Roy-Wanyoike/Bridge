@@ -19,7 +19,7 @@ workspace packages (`"test": "tsc -p . && node --test …"` in each
 | bridge-ffi | 1 | 12 | 12 | 0 | 0 | glue generation invariants incl. "no TODO in output" |
 | bridge-lsp | 1 | 38 | 38 | 0 | 0 | full JSON-RPC duplex harness over in-memory transports |
 | **Workspace total** | **46** | **831** | **827** | **0** | **4** | matches the ROADMAP's "831 tests across nine packages" exactly |
-| dashboard (vitest) | 10 | **100** | 100 | 0 | 0 | pages, components, registry client, hrefs; ROADMAP still says 94 — stale |
+| dashboard (vitest) | 18 | **167** | 167 | 0 | 0 | pages, components, registry client, hrefs; suite grew to 167 with the OIDC-gate tests (#163) |
 
 ¹ `.test.ts` files under `src/test/`; property files counted separately.
 
@@ -88,5 +88,5 @@ v24.21.0 used for the audit run); dashboard via `cd dashboard && npm test`.
 4. Wire `dashboard npm run parity` into the dashboard job.
 5. Add a service-level property/fuzz pass (route fuzzing over the in-memory
    driver) reusing the existing seeded-harness pattern.
-6. Fix the stale dashboard count (94 → 100) in `docs/TESTING.md` +
+6. Fix the stale dashboard count (94 → 167) — done in the #163 wave in `docs/TESTING.md` +
    `docs/ROADMAP.md` and teach `check-docs-facts.mjs` to pin it.
