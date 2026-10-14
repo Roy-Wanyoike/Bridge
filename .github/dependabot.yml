@@ -3,7 +3,10 @@
 # npm app (own package.json + package-lock.json), and the action pins in
 # .github/workflows. NOTE (issue #127): GitHub Actions is currently
 # billing-locked, so Dependabot PRs will queue up but their CI checks stay
-# pending until Actions runs are re-enabled.
+# pending until Actions runs are re-enabled. For the same reason, MAJOR
+# version bumps are ignored below: a major action/toolchain bump can silently
+# change workflow behavior and there is no pipeline to catch it. Remove the
+# ignore blocks as part of unlocking CI (issue #127).
 version: 2
 updates:
   # Root monorepo: workspace devDependencies + toolchain.
@@ -20,6 +23,10 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
 
   # Dashboard is its own npm app with its own lockfile.
   - package-ecosystem: npm
@@ -35,6 +42,10 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
 
   # Keep the actions/*, dtolnay/* and Swatinem/* pins fresh.
   - package-ecosystem: github-actions
@@ -44,3 +55,7 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: ci
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
