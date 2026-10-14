@@ -4,7 +4,11 @@
 
 //! Constraint validation generated from the Bridge @constraint annotations.
 //! Note: `len()` counts bytes, not unicode characters (documented v1 caveat).
+//! @pattern checks are precompiled once into std::sync::LazyLock<Regex> statics
+//! (the `regex` crate has RE2-family semantics, matching the Bridge @pattern rule).
 
+use std::sync::LazyLock;
+use regex::Regex;
 use crate::types::{Address, Cart, CreatePaymentRequest, Customer, GetPaymentRequest, LegacyPayment, Money, Order, OrderLine, Payment};
 
 /// Validation error returned by generated `validate` functions: the dotted
@@ -26,10 +30,14 @@ impl ValidationError {
 
 impl Address {
     /// Validates the constraints declared on Address in the Bridge contract.
-    ///
-    /// # Notes
-    /// - `postal_code`: pattern validation not supported in generated Rust v1
     pub fn validate(&self) -> Result<(), ValidationError> {
+        // RE_POSTAL_CODE matches the @pattern constraint on Address.postal_code; compiled once (regex crate, RE2-family semantics).
+        static RE_POSTAL_CODE: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"^[0-9]{5}$").expect("valid @pattern regex for Address.postal_code")
+        });
+        if !RE_POSTAL_CODE.is_match(&self.postal_code) {
+            return Err(ValidationError::new("postal_code", "must match pattern ^[0-9]{5}$"));
+        }
         if self.country.len() != 2 {
             return Err(ValidationError::new("country", "must be exactly 2 characters"));
         }
@@ -91,10 +99,14 @@ impl LegacyPayment {
 
 impl Money {
     /// Validates the constraints declared on Money in the Bridge contract.
-    ///
-    /// # Notes
-    /// - `amount`: pattern validation not supported in generated Rust v1
     pub fn validate(&self) -> Result<(), ValidationError> {
+        // RE_AMOUNT matches the @pattern constraint on Money.amount; compiled once (regex crate, RE2-family semantics).
+        static RE_AMOUNT: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"^[0-9]+\.[0-9]{2}$").expect("valid @pattern regex for Money.amount")
+        });
+        if !RE_AMOUNT.is_match(&self.amount) {
+            return Err(ValidationError::new("amount", "must match pattern ^[0-9]+\\.[0-9]{2}$"));
+        }
         if self.currency.len() != 3 {
             return Err(ValidationError::new("currency", "must be exactly 3 characters"));
         }

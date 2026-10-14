@@ -83,7 +83,7 @@ field := doc* NAME ('?')? ':' type ('?')? constraint* ('=' default)?
 | `@length(n)` | `string` | 1 or 2 numbers | exact length, or `[min, max]` |
 | `@email` | `string` | — | RFC-style email shape |
 | `@url` | `string` | — | URL shape |
-| `@pattern(re)` | `string` | regex string | user regex — must be plain **RE2** syntax (`BR2018` otherwise): no lookahead/lookbehind, no backreferences (any `\1`–`\9`; octal escapes must start with `\0`), no atomic groups or possessive/nested quantifiers. Go's `regexp` (RE2) would panic in `regexp.MustCompile` at init otherwise. Generated Rust validators still do not evaluate `@pattern` (v1 limitation) |
+| `@pattern(re)` | `string` | regex string | user regex — must be plain **RE2** syntax (`BR2018` otherwise): no lookahead/lookbehind, no backreferences (any `\1`–`\9`; octal escapes must start with `\0`), no atomic groups or possessive/nested quantifiers. Go's `regexp` (RE2) would panic in `regexp.MustCompile` at init otherwise. Generated Rust validators enforce `@pattern` with the `regex` crate (RE2-family semantics): one init-once `LazyLock<Regex>` static per constrained field, and `regex` is added to the generated `Cargo.toml` only when `@pattern` is used. A pattern the crate cannot compile fails Rust generation with `BR2020` — never a silent skip (unreachable for valid IDL, which is RE2-only by `BR2018`) |
 | `@uuid` | `string` | — | UUID shape |
 
 ¹ numeric types: `int32`, `int64`, `uint32`, `uint64`, `float32`, `float64`,
@@ -285,6 +285,7 @@ payment.bridge:8:13: error BR2001: Unknown type `mony`.
 | Syntax | `BR1004` (parser errors: unexpected token, unclosed block, malformed constraint args, …) · `BR1005` type nesting too deep (max 256 levels) |
 | Semantic — declarations | `BR2001` unknown type · `BR2002` duplicate declaration · `BR2003` duplicate field/union member · `BR2004` duplicate enum variant · `BR2005` duplicate method · `BR2006` duplicate import · `BR2007` package statement problems · `BR2008` invalid dotted name · `BR2009` alias cycle · `BR2010` method signature must reference structs · `BR2011` invalid map key · `BR2012` optional collection element · `BR2013` constraint not applicable · `BR2014` unknown constraint · `BR2015` unknown imported package · `BR2016` constraint argument shape/arity · `BR2017` recursive struct · `BR2018` @pattern not RE2-compatible · `BR2019` unhashable set element |
 | Semantic — style (warnings) | `BR2101` · `BR2102` · `BR2103` (see Naming conventions) · `BR2104` redundant optional marker (`T??` / `T?: T?`) |
+| Generation | `BR2020` `@pattern` not compilable by the Rust `regex` crate (rust generator; generation-time — the IR carries no source positions, so the diagnostic anchors on the package and names the offending `Type.field`) |
 | Internal | `BR2999` (unexpected compiler failure — please report) |
 
 Only `error`-severity diagnostics block compilation (`ok === false`);

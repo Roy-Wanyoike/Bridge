@@ -72,6 +72,8 @@ test('Rust: Cargo.toml, serde derives, deterministic collections', () => {
   const cargo = byPath(files, 'Cargo.toml');
   assert.match(cargo.content, /^name = "bridge-payments-v1"$/m);
   assert.match(cargo.content, /serde = \{ version = "1", features = \["derive"\] \}/);
+  // G1: the regex crate is added when (and only when) @pattern is declared.
+  assert.match(cargo.content, /^regex = "1"$/m);
   const types = byPath(files, 'src/types.rs');
   commonHeader(types.content);
   assert.match(types.content, /#\[derive\(.*Serialize/);
@@ -84,7 +86,12 @@ test('Rust: Cargo.toml, serde derives, deterministic collections', () => {
   assert.match(types.content, /pub type LoyaltyProfile = serde_json::Value/);
   const validate = byPath(files, 'src/validate.rs');
   assert.match(validate.content, /pub fn validate\(&self\) -> Result<\(\), ValidationError>/);
-  assert.match(validate.content, /pattern validation not supported in generated Rust v1/);
+  // G1: @pattern is enforced with the regex crate (precompiled statics).
+  assert.match(validate.content, /static RE_POSTAL_CODE: LazyLock<Regex> = LazyLock::new/);
+  assert.match(validate.content, /static RE_AMOUNT: LazyLock<Regex> = LazyLock::new/);
+  assert.match(validate.content, /RE_POSTAL_CODE\.is_match\(&self\.postal_code\)/);
+  assert.match(validate.content, /must match pattern \^\[0-9\]\{5\}\$"/);
+  assert.ok(!validate.content.includes('pattern validation not supported'), 'silent @pattern skip must be gone');
   for (const file of files) commonHeader(file.content);
 });
 
