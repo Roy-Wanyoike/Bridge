@@ -22,6 +22,7 @@
     "typescript-eslint": "^8.46.4"
   },
   "scripts": {
+    "bench": "node scripts/bench.mjs",
     "build": "tsc -b packages/bridge-core packages/bridge-generators packages/bridge-compat packages/bridge-registry packages/bridge-serialization packages/bridge-registry-service packages/bridge-cli packages/bridge-ffi",
     "test": "npm run test --workspaces --if-present",
     "lint": "eslint packages --max-warnings 0"
