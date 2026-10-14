@@ -54,3 +54,6 @@ worktrees/
 # Local tool outputs (never commit)
 tool-results/
 worktrees/
+
+# Vercel local project link + build output
+.vercel/
