@@ -13,7 +13,7 @@
     "test": "tsc -p . && node --test \"dist/test/*.test.js\" \"dist/test/property/*.test.js\""
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.5",
     "typescript": "^5.9.3"
   }
 }
